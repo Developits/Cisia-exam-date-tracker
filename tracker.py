@@ -156,11 +156,16 @@ def fetch_page(page_info: dict) -> list[dict]:
 
 def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bool:
     """
-    Sends an instant push notification via Telegram Bot API with inline buttons.
+    Sends an instant push notification via Telegram Bot API with inline buttons to all configured chat IDs.
     """
     token = config.TELEGRAM_BOT_TOKEN.strip()
-    chat_id = config.TELEGRAM_CHAT_ID.strip()
-    if not token or not chat_id:
+    raw_chat_ids = config.TELEGRAM_CHAT_ID.strip()
+    if not token or not raw_chat_ids:
+        return False
+
+    # Support multiple comma/space/semicolon separated chat IDs
+    chat_ids = [c.strip() for c in raw_chat_ids.replace(";", ",").replace(" ", ",").split(",") if c.strip()]
+    if not chat_ids:
         return False
 
     if change_type == "new":
@@ -181,30 +186,33 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
         f"⚡ <b>Stato:</b> {row['stato']}"
     )
 
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-        "reply_markup": {
-            "inline_keyboard": [
-                [
-                    {"text": "🚀 Prenota su CISIA", "url": config.CISIA_LOGIN_URL},
-                    {"text": "📅 Apri Calendario", "url": row["url"]}
-                ]
-            ]
-        }
-    }
-
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        res.raise_for_status()
-        logger.info(f"Telegram notification sent to chat_id '{chat_id}' for {row['universita']} ({row['data_test']})")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send Telegram notification: {e}")
-        return False
+    sent_successfully = 0
+
+    for cid in chat_ids:
+        payload = {
+            "chat_id": cid,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False,
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {"text": "🚀 Prenota su CISIA", "url": config.CISIA_LOGIN_URL},
+                        {"text": "📅 Apri Calendario", "url": row["url"]}
+                    ]
+                ]
+            }
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=10)
+            res.raise_for_status()
+            logger.info(f"Telegram notification sent to chat_id '{cid}' for {row['universita']} ({row['data_test']})")
+            sent_successfully += 1
+        except Exception as e:
+            logger.error(f"Failed to send Telegram notification to chat_id '{cid}': {e}")
+
+    return sent_successfully > 0
 
 
 def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
