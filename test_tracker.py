@@ -192,7 +192,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         parsed = tracker.parse_page_rows(self.sample_html, self.page_info)
         initial_state = {parsed[0]["key"]: parsed[0]}  # only Pisa initially
 
-        # Current returns Pisa + Sapienza (which has POSTI DISPONIBILI)
+        # Current returns Pisa + Sapienza (which has POSTI DISPONIBILI and is TOLC@CASA)
         updated_html = self.sample_html.replace("POSTI ESAURITI", "POSTI DISPONIBILI")
         mock_fetch.return_value = tracker.parse_page_rows(updated_html, self.page_info)
 
@@ -202,6 +202,51 @@ class TestParserAndChangeDetection(unittest.TestCase):
         mock_alert.assert_called_once()
         args, kwargs = mock_alert.call_args
         self.assertEqual(kwargs["change_type"], "new")
+
+    @patch("tracker.send_notifications", return_value=True)
+    @patch("tracker.save_state")
+    @patch("tracker.fetch_page")
+    def test_uni_modality_status_change_is_ignored(self, mock_fetch, mock_save, mock_alert):
+        # Pisa is TOLC@UNI
+        parsed = tracker.parse_page_rows(self.sample_html, self.page_info)
+        initial_pisa = dict(parsed[0])
+        initial_pisa["stato"] = "POSTI ESAURITI"
+        initial_state = {initial_pisa["key"]: initial_pisa}
+
+        # Current returns Pisa with POSTI DISPONIBILI, but it's TOLC@UNI so should NOT alert
+        mock_fetch.return_value = [parsed[0]]  # Pisa TOLC@UNI POSTI DISPONIBILI
+
+        state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
+
+        self.assertEqual(alerts, 0)
+        mock_alert.assert_not_called()
+
+    @patch("tracker.send_notifications", return_value=True)
+    @patch("tracker.save_state")
+    @patch("tracker.fetch_page")
+    def test_cent_casa_modality_triggers_alert(self, mock_fetch, mock_save, mock_alert):
+        # CEnT-S CENT@CASA test
+        cent_row = {
+            "key": "CEnT-S (Inglese)|CENT@CASA|Sapienza Università di Roma|ROMA|15/09/2026",
+            "test_type": "CEnT-S (Inglese)",
+            "url": "https://testcisia.it/calendario.php?tolc=cents&lingua=inglese",
+            "modalita": "CENT@CASA",
+            "universita": "Sapienza Università di Roma",
+            "regione": "LAZIO",
+            "citta": "ROMA",
+            "fine_iscrizioni": "01/09/2026",
+            "posti": "5",
+            "stato": "POSTI DISPONIBILI",
+            "data_test": "15/09/2026"
+        }
+        old_cent = dict(cent_row)
+        old_cent["stato"] = "POSTI ESAURITI"
+
+        mock_fetch.return_value = [cent_row]
+        state, alerts = tracker.run_check_cycle(previous_state={old_cent["key"]: old_cent}, is_first_run=False)
+
+        self.assertEqual(alerts, 1)
+        mock_alert.assert_called_once()
 
 
 if __name__ == "__main__":

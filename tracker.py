@@ -298,10 +298,15 @@ def save_state(state: dict[str, dict]):
             os.remove(temp_file)
 
 
+def is_casa_modality(modalita: str) -> bool:
+    """Checks if modality is home-based (e.g. TOLC@CASA or CENT@CASA)."""
+    return "CASA" in (modalita or "").upper()
+
+
 def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tuple[dict[str, dict], int]:
     """
     Fetches all tracked pages, compares against previous state,
-    and dispatches notifications for newly available seats.
+    and dispatches notifications for newly available seats (TOLC@CASA / CENT@CASA only).
     Returns the updated state and count of alerts sent.
     """
     current_state = {}
@@ -319,19 +324,23 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
 
     if is_first_run and not previous_state:
         # First startup: record baseline state without notification spam
-        available_count = sum(1 for r in current_state.values() if "POSTI DISPONIBILI" in r["stato"])
-        logger.info(f"Initialized baseline state with {len(current_state)} total rows ({available_count} currently available).")
+        available_casa = sum(
+            1 for r in current_state.values()
+            if is_casa_modality(r["modalita"]) and "POSTI DISPONIBILI" in r["stato"]
+        )
+        logger.info(f"Initialized baseline state with {len(current_state)} total rows ({available_casa} CASA seats currently available).")
         save_state(current_state)
         return current_state, 0
 
-    # Detect changes
+    # Detect changes (Only notify for @CASA tests)
     for key, row in current_state.items():
         is_available = "POSTI DISPONIBILI" in row["stato"]
+        is_casa = is_casa_modality(row.get("modalita", ""))
 
         if key not in previous_state:
-            # Condition 1: New row added with POSTI DISPONIBILI
-            if is_available:
-                logger.info(f"NEW ROW with available seats: {row['test_type']} | {row['universita']} | {row['data_test']}")
+            # Condition 1: New CASA row added with POSTI DISPONIBILI
+            if is_casa and is_available:
+                logger.info(f"NEW CASA ROW with available seats: {row['test_type']} | {row['universita']} | {row['data_test']}")
                 if send_notifications(row, change_type="new"):
                     alerts_sent += 1
         else:
@@ -339,9 +348,9 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
             old_stato = old_row.get("stato", "")
             was_available = "POSTI DISPONIBILI" in old_stato
 
-            # Condition 2: Existing row became POSTI DISPONIBILI from previous non-available status
-            if is_available and not was_available:
-                logger.info(f"STATUS CHANGED to available: {row['test_type']} | {row['universita']} | {row['data_test']} (Old: {old_stato})")
+            # Condition 2: Existing CASA row became POSTI DISPONIBILI from previous non-available status
+            if is_casa and is_available and not was_available:
+                logger.info(f"STATUS CHANGED to available for CASA: {row['test_type']} | {row['universita']} | {row['data_test']} (Old: {old_stato})")
                 if send_notifications(row, change_type="status_change", old_status=old_stato):
                     alerts_sent += 1
 
@@ -354,7 +363,7 @@ def send_test_notification():
     sample_row = {
         "test_type": "TOLC-I (Ingegneria) [TEST]",
         "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
-        "modalita": "TOLC@UNI",
+        "modalita": "TOLC@CASA",
         "universita": "Università di Prova (Test Alert)",
         "regione": "LAZIO",
         "citta": "ROMA",
@@ -377,8 +386,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             sample_row = {
                 "test_type": "TOLC-I (Ingegneria) [TEST]",
                 "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
-                "modalita": "TOLC@UNI",
-                "universita": "Università di Roma Sapienza (Test Alert)",
+                "modalita": "TOLC@CASA",
+                "universita": "Sapienza Università di Roma (Test Alert)",
                 "regione": "LAZIO",
                 "citta": "ROMA",
                 "fine_iscrizioni": "01/09/2026",
