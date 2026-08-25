@@ -151,7 +151,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         self.assertEqual(row2["modalita"], "TOLC@CASA")
         self.assertEqual(row2["stato"], "POSTI ESAURITI")
 
-    @patch("tracker.send_ntfy_alert")
+    @patch("tracker.send_notifications")
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
     def test_first_run_silent_initialization(self, mock_fetch, mock_save, mock_alert):
@@ -165,7 +165,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         self.assertTrue(mock_save.called)
         self.assertEqual(len(state), 2)
 
-    @patch("tracker.send_ntfy_alert", return_value=True)
+    @patch("tracker.send_notifications", return_value=True)
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
     def test_status_change_triggers_alert(self, mock_fetch, mock_save, mock_alert):
@@ -185,7 +185,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         self.assertEqual(kwargs["change_type"], "status_change")
         self.assertEqual(kwargs["old_status"], "POSTI ESAURITI")
 
-    @patch("tracker.send_ntfy_alert", return_value=True)
+    @patch("tracker.send_notifications", return_value=True)
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
     def test_new_available_row_triggers_alert(self, mock_fetch, mock_save, mock_alert):

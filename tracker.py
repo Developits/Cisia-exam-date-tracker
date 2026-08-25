@@ -154,11 +154,67 @@ def fetch_page(page_info: dict) -> list[dict]:
         return []
 
 
+def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bool:
+    """
+    Sends an instant push notification via Telegram Bot API with inline buttons.
+    """
+    token = config.TELEGRAM_BOT_TOKEN.strip()
+    chat_id = config.TELEGRAM_CHAT_ID.strip()
+    if not token or not chat_id:
+        return False
+
+    if change_type == "new":
+        reason_text = "✨ <b>Nuova data aggiunta con posti disponibili!</b>"
+    else:
+        reason_text = f"🔄 <b>Stato aggiornato:</b> <s>{old_status}</s> ➔ <b>POSTI DISPONIBILI</b>"
+
+    message = (
+        f"🚨 <b>POSTI DISPONIBILI CISIA!</b>\n"
+        f"📚 <b>Test:</b> {row['test_type']}\n\n"
+        f"{reason_text}\n\n"
+        f"🏛 <b>Università:</b> {row['universita']}\n"
+        f"💻 <b>Modalità:</b> {row['modalita']}\n"
+        f"📍 <b>Città:</b> {row['citta']} ({row['regione']})\n"
+        f"📅 <b>Data Test:</b> <code>{row['data_test']}</code>\n"
+        f"🎟 <b>Posti:</b> <b>{row['posti']}</b>\n"
+        f"⏳ <b>Fine Iscrizioni:</b> {row['fine_iscrizioni']}\n"
+        f"⚡ <b>Stato:</b> {row['stato']}"
+    )
+
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False,
+        "reply_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "🚀 Prenota su CISIA", "url": config.CISIA_LOGIN_URL},
+                    {"text": "📅 Apri Calendario", "url": row["url"]}
+                ]
+            ]
+        }
+    }
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        res.raise_for_status()
+        logger.info(f"Telegram notification sent to chat_id '{chat_id}' for {row['universita']} ({row['data_test']})")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send Telegram notification: {e}")
+        return False
+
+
 def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
     """
     Sends a high-priority push notification via ntfy.sh.
     """
-    topic = config.NTFY_TOPIC
+    topic = config.NTFY_TOPIC.strip()
+    if not topic:
+        return False
+
     url = f"{config.NTFY_SERVER}/{topic}"
 
     title = f"🚨 Posti Disponibili! [{row['test_type']}]"
@@ -200,6 +256,13 @@ def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
     except Exception as e:
         logger.error(f"Failed to send ntfy notification: {e}")
         return False
+
+
+def send_notifications(row: dict, change_type: str, old_status: str = "") -> bool:
+    """Dispatches notifications across all configured channels (Telegram and/or ntfy)."""
+    sent_telegram = send_telegram_alert(row, change_type, old_status)
+    sent_ntfy = send_ntfy_alert(row, change_type, old_status)
+    return sent_telegram or sent_ntfy
 
 
 def load_state() -> dict[str, dict]:
@@ -261,7 +324,7 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
             # Condition 1: New row added with POSTI DISPONIBILI
             if is_available:
                 logger.info(f"NEW ROW with available seats: {row['test_type']} | {row['universita']} | {row['data_test']}")
-                if send_ntfy_alert(row, change_type="new"):
+                if send_notifications(row, change_type="new"):
                     alerts_sent += 1
         else:
             old_row = previous_state[key]
@@ -271,7 +334,7 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
             # Condition 2: Existing row became POSTI DISPONIBILI from previous non-available status
             if is_available and not was_available:
                 logger.info(f"STATUS CHANGED to available: {row['test_type']} | {row['universita']} | {row['data_test']} (Old: {old_stato})")
-                if send_ntfy_alert(row, change_type="status_change", old_status=old_stato):
+                if send_notifications(row, change_type="status_change", old_status=old_stato):
                     alerts_sent += 1
 
     save_state(current_state)
@@ -279,7 +342,7 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
 
 
 def send_test_notification():
-    """Sends a sample test alert to verify the ntfy setup."""
+    """Sends a sample test alert to verify notification setup."""
     sample_row = {
         "test_type": "TOLC-I (Ingegneria) [TEST]",
         "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
@@ -292,12 +355,12 @@ def send_test_notification():
         "stato": "POSTI DISPONIBILI",
         "data_test": "15/09/2026"
     }
-    logger.info(f"Sending test notification to topic: '{config.NTFY_TOPIC}' via {config.NTFY_SERVER}...")
-    success = send_ntfy_alert(sample_row, change_type="new")
+    logger.info("Sending test notification across configured channels...")
+    success = send_notifications(sample_row, change_type="new")
     if success:
-        logger.info("Test notification delivered successfully! Check your phone/browser on ntfy.sh.")
+        logger.info("Test notification delivered successfully!")
     else:
-        logger.error("Test notification failed. Please check your network and topic name.")
+        logger.error("Test notification failed. Please verify TELEGRAM_BOT_TOKEN/CHAT_ID or NTFY_TOPIC.")
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -315,14 +378,15 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 "stato": "POSTI DISPONIBILI",
                 "data_test": "15/09/2026"
             }
-            success = send_ntfy_alert(sample_row, change_type="new")
+            success = send_notifications(sample_row, change_type="new")
             self.send_response(200 if success else 500)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             resp = {
                 "success": success,
                 "message": "Test notification triggered from Render!",
-                "topic": config.NTFY_TOPIC
+                "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
+                "ntfy_configured": bool(config.NTFY_TOPIC)
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -334,7 +398,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         status_data = {
             "status": "online",
             "rome_time": rome_now,
-            "topic": config.NTFY_TOPIC,
+            "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
+            "ntfy_configured": bool(config.NTFY_TOPIC),
             "active_now": is_active_minute(get_rome_now())
         }
         self.wfile.write(json.dumps(status_data).encode("utf-8"))
