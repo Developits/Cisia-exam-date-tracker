@@ -11,6 +11,8 @@ import json
 import time
 import argparse
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import requests
@@ -298,6 +300,36 @@ def send_test_notification():
         logger.error("Test notification failed. Please check your network and topic name.")
 
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        rome_now = get_rome_now().strftime("%Y-%m-%d %H:%M:%S")
+        status_data = {
+            "status": "online",
+            "rome_time": rome_now,
+            "topic": config.NTFY_TOPIC,
+            "active_now": is_active_minute(get_rome_now())
+        }
+        self.wfile.write(json.dumps(status_data).encode("utf-8"))
+
+    def log_message(self, format, *args):
+        # Suppress noisy HTTP access logs
+        return
+
+
+def start_health_server():
+    port = int(os.getenv("PORT", "8080"))
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"Health check HTTP server started on port {port} (Ready for Render/Cloud hosts)")
+    except Exception as e:
+        logger.warning(f"Could not start HTTP server on port {port}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="CISIA TOLC Seat Availability Tracker")
     parser.add_argument("--once", action="store_true", help="Run a single check cycle immediately and exit.")
@@ -321,6 +353,9 @@ def main():
         state, alerts = run_check_cycle(state, is_first_run)
         logger.info(f"Cycle completed. Alerts sent: {alerts}")
         return
+
+    # Start health check server for Render/Cloud hosts
+    start_health_server()
 
     logger.info("==================================================")
     logger.info("       CISIA TOLC Availability Tracker Starting    ")
