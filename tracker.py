@@ -13,6 +13,7 @@ import html
 import argparse
 import logging
 import threading
+import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -241,6 +242,66 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
     return sent_successfully > 0
 
 
+# Cache for error throttling: {error_signature: last_sent_timestamp}
+_last_error_alerts: dict[str, float] = {}
+
+
+def send_developer_error_alert(error_title: str, error_detail: str, traceback_str: str = "", force: bool = False) -> bool:
+    """
+    Sends an error notification with stack trace directly to the developer Telegram chat ID (Mr Marshmallow: 1720364178).
+    Throttles identical error signatures to once every ERROR_THROTTLE_SECONDS unless force=True.
+    """
+    token = config.TELEGRAM_BOT_TOKEN.strip()
+    dev_id = getattr(config, "DEVELOPER_CHAT_ID", "").strip()
+    if not token or not dev_id:
+        return False
+
+    now = time.time()
+    error_key = f"{error_title}:{error_detail[:100]}"
+
+    if not force:
+        last_sent = _last_error_alerts.get(error_key, 0.0)
+        if now - last_sent < config.ERROR_THROTTLE_SECONDS:
+            logger.info(f"Skipping duplicate developer error alert (throttled): {error_title}")
+            return False
+
+    _last_error_alerts[error_key] = now
+
+    rome_time = get_rome_now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Truncate traceback to safe length (Telegram limit is 4096 chars for message)
+    clean_tb = traceback_str.strip()
+    if len(clean_tb) > 2000:
+        clean_tb = clean_tb[-2000:]
+
+    tb_section = f"\n\n📋 <b>Traceback:</b>\n<pre><code>{html.escape(clean_tb)}</code></pre>" if clean_tb else ""
+
+    message = (
+        f"⚠️ <b>CISIA TRACKER ERROR ALERT</b>\n"
+        f"⏰ <b>Rome Time:</b> <code>{rome_time}</code>\n"
+        f"🚨 <b>Issue:</b> <b>{html.escape(error_title)}</b>\n"
+        f"📝 <b>Details:</b> {html.escape(error_detail)}"
+        f"{tb_section}"
+    )
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": dev_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+
+    try:
+        res = http_session.post(url, json=payload, timeout=10)
+        res.raise_for_status()
+        logger.info(f"Developer error alert delivered to chat_id '{dev_id}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to deliver developer error alert to chat_id '{dev_id}': {e}")
+        return False
+
+
 def send_notifications(row: dict, change_type: str, old_status: str = "") -> bool:
     """Dispatches notifications to configured Telegram chat IDs."""
     return send_telegram_alert(row, change_type, old_status)
@@ -406,6 +467,29 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
+        if self.path == "/test-error":
+            sample_tb = (
+                "Traceback (most recent call last):\n"
+                "  File \"tracker.py\", line 560, in main\n"
+                "    state, alerts = run_check_cycle(state, is_first_run)\n"
+                "  File \"tracker.py\", line 370, in run_check_cycle\n"
+                "    raise ConnectionResetError(\"Simulated Render Error for Developer Alert Testing\")"
+            )
+            success = send_developer_error_alert(
+                error_title="Simulated Test Error on Render",
+                error_detail="ConnectionResetError: Simulated Render Error for Developer Alert Testing",
+                traceback_str=sample_tb,
+                force=True
+            )
+            self.send_response(200 if success else 500)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            resp = {
+                "success": success,
+                "message": f"Developer test error alert sent to Telegram ID {config.DEVELOPER_CHAT_ID}!",
+                "developer_id": config.DEVELOPER_CHAT_ID
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
 
         self.send_response(200)
@@ -416,6 +500,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             "status": "online",
             "rome_time": rome_now,
             "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
+            "developer_id": config.DEVELOPER_CHAT_ID,
             "active_now": is_active_minute(get_rome_now())
         }
         self.wfile.write(json.dumps(status_data).encode("utf-8"))
@@ -440,11 +525,21 @@ def main():
     parser = argparse.ArgumentParser(description="CISIA TOLC Seat Availability Tracker")
     parser.add_argument("--once", action="store_true", help="Run a single check cycle immediately and exit.")
     parser.add_argument("--test-notify", action="store_true", help="Send a test notification to Telegram and exit.")
+    parser.add_argument("--test-error", action="store_true", help="Send a test error notification to developer and exit.")
     parser.add_argument("--reset-state", action="store_true", help="Delete state.json before running.")
     args = parser.parse_args()
 
     if args.test_notify:
         send_test_notification()
+        return
+
+    if args.test_error:
+        send_developer_error_alert(
+            error_title="Manual Test Error",
+            error_detail="Developer requested manual error test via CLI",
+            traceback_str="Traceback (most recent call last):\n  File \"tracker.py\", line 1\n    Manual CLI test invocation",
+            force=True
+        )
         return
 
     if args.reset_state and os.path.exists(config.STATE_FILE):
@@ -468,6 +563,7 @@ def main():
     logger.info(f" Timezone: {config.TIMEZONE}")
     logger.info(f" Operating Hours: {config.START_HOUR:02d}:{config.START_MINUTE:02d} to {config.END_HOUR:02d}:{config.END_MINUTE:02d} (Every 1 minute)")
     logger.info(f" Telegram Broadcast: {'Configured' if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else 'Disabled'}")
+    logger.info(f" Developer Error Alert ID: {config.DEVELOPER_CHAT_ID or 'Disabled'}")
     logger.info("==================================================")
 
     while True:
@@ -491,7 +587,13 @@ def main():
             logger.info("Tracker stopped by user.")
             sys.exit(0)
         except Exception as e:
+            tb_str = traceback.format_exc()
             logger.error(f"Unexpected error in main loop: {e}", exc_info=True)
+            send_developer_error_alert(
+                error_title="Main Loop Exception",
+                error_detail=str(e),
+                traceback_str=tb_str
+            )
             time.sleep(30)
 
 

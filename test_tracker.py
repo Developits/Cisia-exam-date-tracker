@@ -225,5 +225,50 @@ class TestParserAndChangeDetection(unittest.TestCase):
         mock_alert.assert_called_once()
 
 
+class TestDeveloperErrorAlerts(unittest.TestCase):
+    def setUp(self):
+        tracker._last_error_alerts.clear()
+
+    @patch("tracker.http_session.post")
+    def test_send_developer_error_alert_success(self, mock_post):
+        mock_post.return_value.raise_for_status = MagicMock()
+        mock_post.return_value.status_code = 200
+
+        with patch("config.TELEGRAM_BOT_TOKEN", "123:ABC"), patch("config.DEVELOPER_CHAT_ID", "1720364178"):
+            success = tracker.send_developer_error_alert(
+                error_title="Test Error",
+                error_detail="Something failed",
+                traceback_str="Traceback snippet"
+            )
+            self.assertTrue(success)
+            mock_post.assert_called_once()
+            args, kwargs = mock_post.call_args
+            payload = kwargs["json"]
+            self.assertEqual(payload["chat_id"], "1720364178")
+            self.assertIn("CISIA TRACKER ERROR ALERT", payload["text"])
+            self.assertIn("Something failed", payload["text"])
+
+    @patch("tracker.http_session.post")
+    def test_developer_error_alert_throttles_repeated_errors(self, mock_post):
+        mock_post.return_value.raise_for_status = MagicMock()
+        mock_post.return_value.status_code = 200
+
+        with patch("config.TELEGRAM_BOT_TOKEN", "123:ABC"), patch("config.DEVELOPER_CHAT_ID", "1720364178"):
+            # First call succeeds
+            res1 = tracker.send_developer_error_alert("RepeatError", "network down")
+            self.assertTrue(res1)
+            self.assertEqual(mock_post.call_count, 1)
+
+            # Second identical call within throttle window is suppressed
+            res2 = tracker.send_developer_error_alert("RepeatError", "network down")
+            self.assertFalse(res2)
+            self.assertEqual(mock_post.call_count, 1)
+
+            # Forced call bypasses throttle
+            res3 = tracker.send_developer_error_alert("RepeatError", "network down", force=True)
+            self.assertTrue(res3)
+            self.assertEqual(mock_post.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
