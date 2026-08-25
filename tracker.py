@@ -302,6 +302,31 @@ def send_test_notification():
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/test":
+            sample_row = {
+                "test_type": "TOLC-I (Ingegneria) [TEST]",
+                "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
+                "modalita": "TOLC@UNI",
+                "universita": "Università di Roma Sapienza (Test Alert)",
+                "regione": "LAZIO",
+                "citta": "ROMA",
+                "fine_iscrizioni": "01/09/2026",
+                "posti": "10",
+                "stato": "POSTI DISPONIBILI",
+                "data_test": "15/09/2026"
+            }
+            success = send_ntfy_alert(sample_row, change_type="new")
+            self.send_response(200 if success else 500)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            resp = {
+                "success": success,
+                "message": "Test notification triggered from Render!",
+                "topic": config.NTFY_TOPIC
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
         self.send_response(200)
         self.send_header("Content-type", "application/json")
         self.end_headers()
