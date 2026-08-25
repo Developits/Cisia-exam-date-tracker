@@ -37,38 +37,38 @@ def get_rome_now() -> datetime:
 def is_active_minute(dt: datetime) -> bool:
     """
     Checks if given Rome datetime falls within:
-    - Daily operating hours: 06:55 to 22:05
-    - Active minute intervals: :55 to :05 and :25 to :35
+    - Daily operating hours: 06:00 to 22:00 (every minute)
     """
-    # Check overall day boundaries
     time_minutes = dt.hour * 60 + dt.minute
-    start_total = config.START_HOUR * 60 + config.START_MINUTE  # 06:55 -> 415
-    end_total = config.END_HOUR * 60 + config.END_MINUTE        # 22:05 -> 1325
+    start_total = config.START_HOUR * 60 + config.START_MINUTE  # 06:00 -> 360
+    end_total = config.END_HOUR * 60 + config.END_MINUTE        # 22:00 -> 1320
 
-    if time_minutes < start_total or time_minutes > end_total:
-        return False
-
-    # Check minute windows
-    minute = dt.minute
-    return any(minute in window for window in config.MINUTE_WINDOWS)
+    return start_total <= time_minutes <= end_total
 
 
 def calculate_sleep_seconds(dt: datetime) -> float:
     """
     Calculates how many seconds to sleep until the next scheduled check.
-    If currently inside an active window, returns seconds to next minute boundary.
-    If outside, searches ahead minute-by-minute for the next active window.
+    If currently inside operating hours (06:00 - 22:00), sleeps until the next minute boundary (~60s).
+    If outside (night time), sleeps until 06:00 next morning.
     """
     if is_active_minute(dt):
         # Sleep until the exact start of the next minute
         return max(1.0, 60.0 - dt.second - (dt.microsecond / 1_000_000.0))
 
-    # Advance minute by minute to find next active slot
-    cursor = dt.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    while not is_active_minute(cursor):
-        cursor += timedelta(minutes=1)
+    # Next active time is START_HOUR:START_MINUTE (06:00:00)
+    if dt.hour >= config.END_HOUR and dt.minute > config.END_MINUTE:
+        # After 22:00, target is tomorrow at 06:00:00
+        target = (dt + timedelta(days=1)).replace(
+            hour=config.START_HOUR, minute=config.START_MINUTE, second=0, microsecond=0
+        )
+    else:
+        # Before 06:00, target is today at 06:00:00
+        target = dt.replace(
+            hour=config.START_HOUR, minute=config.START_MINUTE, second=0, microsecond=0
+        )
 
-    delta = (cursor - dt).total_seconds()
+    delta = (target - dt).total_seconds()
     return max(1.0, delta)
 
 
@@ -467,10 +467,9 @@ def main():
     logger.info("==================================================")
     logger.info("       CISIA TOLC Availability Tracker Starting    ")
     logger.info(f" Timezone: {config.TIMEZONE}")
-    logger.info(f" Active Hours: {config.START_HOUR:02d}:{config.START_MINUTE:02d} to {config.END_HOUR:02d}:{config.END_MINUTE:02d}")
-    logger.info(f" Active Windows: :55-:05 and :25-:35 every minute")
-    logger.info(f" ntfy Server: {config.NTFY_SERVER}")
-    logger.info(f" ntfy Topic:  {config.NTFY_TOPIC}")
+    logger.info(f" Operating Hours: {config.START_HOUR:02d}:{config.START_MINUTE:02d} to {config.END_HOUR:02d}:{config.END_MINUTE:02d} (Every 1 minute)")
+    logger.info(f" Telegram Broadcast: {'Configured' if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else 'Disabled'}")
+    logger.info(f" ntfy Topic: {config.NTFY_TOPIC or 'Disabled'}")
     logger.info("==================================================")
 
     while True:

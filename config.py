@@ -34,20 +34,12 @@ CISIA_LOGIN_URL = "https://testcisia.it/studenti_tolc/login_sso.php"
 # Timezone & Schedule configuration
 TIMEZONE = "Europe/Rome"
 
-# Windows of minutes in each active hour:
-# Window 1: :55 to :05 (e.g. 06:55 to 07:05, 07:55 to 08:05, ..., 21:55 to 22:05)
-# Window 2: :25 to :35 (e.g. 07:25 to 07:35, 08:25 to 08:35, ..., 21:25 to 21:35)
-MINUTE_WINDOWS = [
-    set(range(25, 36)),  # 25, 26, ..., 35
-    set(range(55, 60)) | set(range(0, 6))  # 55, 56, 57, 58, 59, 0, 1, 2, 3, 4, 5
-]
-
-# Overall daily operational window (Rome local time):
-# Starts at 06:55 (morning) and finishes at 22:05 (10 PM window end)
+# Daily operational window (Rome local time):
+# Runs every 1 minute continuously from 06:00 to 22:00
 START_HOUR = 6
-START_MINUTE = 55
+START_MINUTE = 0
 END_HOUR = 22
-END_MINUTE = 5
+END_MINUTE = 0
 
 # State persistence
 STATE_FILE = os.getenv("STATE_FILE", "state.json")

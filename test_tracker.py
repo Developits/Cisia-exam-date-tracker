@@ -19,52 +19,28 @@ class TestScheduler(unittest.TestCase):
         self.rome_tz = ZoneInfo("Europe/Rome")
 
     def test_active_minute_windows(self):
-        # 06:54 -> False (before start)
-        dt = datetime(2026, 8, 25, 6, 54, tzinfo=self.rome_tz)
+        # 05:59 -> False (before start)
+        dt = datetime(2026, 8, 25, 5, 59, tzinfo=self.rome_tz)
         self.assertFalse(tracker.is_active_minute(dt))
 
-        # 06:55 -> True (morning start)
-        dt = datetime(2026, 8, 25, 6, 55, tzinfo=self.rome_tz)
+        # 06:00 -> True (start)
+        dt = datetime(2026, 8, 25, 6, 0, tzinfo=self.rome_tz)
         self.assertTrue(tracker.is_active_minute(dt))
 
-        # 07:00 -> True (in 55-05 window)
-        dt = datetime(2026, 8, 25, 7, 0, tzinfo=self.rome_tz)
+        # 07:15 -> True (mid morning, every minute active)
+        dt = datetime(2026, 8, 25, 7, 15, tzinfo=self.rome_tz)
         self.assertTrue(tracker.is_active_minute(dt))
 
-        # 07:05 -> True (window boundary)
-        dt = datetime(2026, 8, 25, 7, 5, tzinfo=self.rome_tz)
+        # 14:42 -> True (afternoon, every minute active)
+        dt = datetime(2026, 8, 25, 14, 42, tzinfo=self.rome_tz)
         self.assertTrue(tracker.is_active_minute(dt))
 
-        # 07:06 -> False (outside window)
-        dt = datetime(2026, 8, 25, 7, 6, tzinfo=self.rome_tz)
-        self.assertFalse(tracker.is_active_minute(dt))
-
-        # 07:20 -> False (outside window)
-        dt = datetime(2026, 8, 25, 7, 20, tzinfo=self.rome_tz)
-        self.assertFalse(tracker.is_active_minute(dt))
-
-        # 07:25 -> True (start of 25-35 window)
-        dt = datetime(2026, 8, 25, 7, 25, tzinfo=self.rome_tz)
+        # 22:00 -> True (end boundary)
+        dt = datetime(2026, 8, 25, 22, 0, tzinfo=self.rome_tz)
         self.assertTrue(tracker.is_active_minute(dt))
 
-        # 07:30 -> True (mid 25-35 window)
-        dt = datetime(2026, 8, 25, 7, 30, tzinfo=self.rome_tz)
-        self.assertTrue(tracker.is_active_minute(dt))
-
-        # 07:35 -> True (end of 25-35 window)
-        dt = datetime(2026, 8, 25, 7, 35, tzinfo=self.rome_tz)
-        self.assertTrue(tracker.is_active_minute(dt))
-
-        # 07:36 -> False (outside window)
-        dt = datetime(2026, 8, 25, 7, 36, tzinfo=self.rome_tz)
-        self.assertFalse(tracker.is_active_minute(dt))
-
-        # 22:05 -> True (night end boundary)
-        dt = datetime(2026, 8, 25, 22, 5, tzinfo=self.rome_tz)
-        self.assertTrue(tracker.is_active_minute(dt))
-
-        # 22:06 -> False (after night end)
-        dt = datetime(2026, 8, 25, 22, 6, tzinfo=self.rome_tz)
+        # 22:01 -> False (after night end)
+        dt = datetime(2026, 8, 25, 22, 1, tzinfo=self.rome_tz)
         self.assertFalse(tracker.is_active_minute(dt))
 
         # 23:00 -> False
@@ -82,16 +58,16 @@ class TestScheduler(unittest.TestCase):
         self.assertAlmostEqual(sleep_sec, 30.0, places=1)
 
     def test_calculate_sleep_seconds_when_inactive(self):
-        # When inactive at 07:06:00, next active is 07:25:00 (19 minutes = 1140 seconds)
-        dt = datetime(2026, 8, 25, 7, 6, 0, 0, tzinfo=self.rome_tz)
+        # When inactive at 05:00:00, next active is today 06:00:00 (1 hour = 3600 seconds)
+        dt = datetime(2026, 8, 25, 5, 0, 0, 0, tzinfo=self.rome_tz)
         sleep_sec = tracker.calculate_sleep_seconds(dt)
-        self.assertEqual(sleep_sec, 19 * 60)
+        self.assertEqual(sleep_sec, 3600)
 
-        # When inactive at 22:10:00, next active is next day 06:55:00
-        # 22:10 to 24:00 is 1h50m (110m), + 6h55m (415m) = 525m = 31500 seconds
+        # When inactive at 22:10:00, next active is tomorrow 06:00:00
+        # 22:10 to 24:00 is 1h50m (110m), + 6h00m (360m) = 470m = 28200 seconds
         dt = datetime(2026, 8, 25, 22, 10, 0, 0, tzinfo=self.rome_tz)
         sleep_sec = tracker.calculate_sleep_seconds(dt)
-        self.assertEqual(sleep_sec, (110 + 415) * 60)
+        self.assertEqual(sleep_sec, (110 + 360) * 60)
 
 
 class TestParserAndChangeDetection(unittest.TestCase):
