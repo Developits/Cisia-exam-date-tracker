@@ -215,62 +215,9 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
     return sent_successfully > 0
 
 
-def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
-    """
-    Sends a high-priority push notification via ntfy.sh.
-    """
-    topic = config.NTFY_TOPIC.strip()
-    if not topic:
-        return False
-
-    url = f"{config.NTFY_SERVER}/{topic}"
-
-    title = f"🚨 Available Seats! [{row['test_type']}]"
-    
-    if change_type == "new":
-        reason_text = "New test date added with available seats!"
-    else:
-        reason_text = f"Status updated: {old_status} ➔ AVAILABLE SEATS"
-
-    body = (
-        f"📢 {reason_text}\n\n"
-        f"🏛 University: {row['university']}\n"
-        f"💻 Format: {row['format']}\n"
-        f"📍 City: {row['city']} ({row['region']})\n"
-        f"📅 Test Date: {row['date']}\n"
-        f"🎟 Seats: {row['seats']}\n"
-        f"⏳ Bookings Deadline: {row['deadline']}\n"
-        f"⚡ State: {row['state']}"
-    )
-
-    headers = {
-        "Title": title.encode("utf-8"),
-        "Priority": config.NTFY_PRIORITY,
-        "Tags": "bell,school,rotating_light",
-        "Click": config.CISIA_LOGIN_URL,
-        "Actions": f"view, Book on CISIA, {config.CISIA_LOGIN_URL}; view, Open Calendar, {row['url']}"
-    }
-
-    try:
-        res = requests.post(
-            url,
-            data=body.encode("utf-8"),
-            headers=headers,
-            timeout=10
-        )
-        res.raise_for_status()
-        logger.info(f"Notification sent successfully to ntfy topic '{topic}' for {row['university']} ({row['date']})")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send ntfy notification: {e}")
-        return False
-
-
 def send_notifications(row: dict, change_type: str, old_status: str = "") -> bool:
-    """Dispatches notifications across all configured channels (Telegram and/or ntfy)."""
-    sent_telegram = send_telegram_alert(row, change_type, old_status)
-    sent_ntfy = send_ntfy_alert(row, change_type, old_status)
-    return sent_telegram or sent_ntfy
+    """Dispatches notifications to configured Telegram chat IDs."""
+    return send_telegram_alert(row, change_type, old_status)
 
 
 def load_state() -> dict[str, dict]:
@@ -382,9 +329,9 @@ def send_test_notification():
     logger.info("Sending test notification across configured channels...")
     success = send_notifications(sample_row, change_type="new")
     if success:
-        logger.info("Test notification delivered successfully!")
+        logger.info("Test notification delivered successfully to Telegram!")
     else:
-        logger.error("Test notification failed. Please verify TELEGRAM_BOT_TOKEN/CHAT_ID or NTFY_TOPIC.")
+        logger.error("Test notification failed. Please verify TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -408,9 +355,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.end_headers()
             resp = {
                 "success": success,
-                "message": "Test notification triggered from Render!",
-                "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
-                "ntfy_configured": bool(config.NTFY_TOPIC)
+                "message": "Test notification triggered from Render to Telegram!",
+                "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
@@ -423,7 +369,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             "status": "online",
             "rome_time": rome_now,
             "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
-            "ntfy_configured": bool(config.NTFY_TOPIC),
             "active_now": is_active_minute(get_rome_now())
         }
         self.wfile.write(json.dumps(status_data).encode("utf-8"))
@@ -447,7 +392,7 @@ def start_health_server():
 def main():
     parser = argparse.ArgumentParser(description="CISIA TOLC Seat Availability Tracker")
     parser.add_argument("--once", action="store_true", help="Run a single check cycle immediately and exit.")
-    parser.add_argument("--test-notify", action="store_true", help="Send a test notification to ntfy and exit.")
+    parser.add_argument("--test-notify", action="store_true", help="Send a test notification to Telegram and exit.")
     parser.add_argument("--reset-state", action="store_true", help="Delete state.json before running.")
     args = parser.parse_args()
 
@@ -476,7 +421,6 @@ def main():
     logger.info(f" Timezone: {config.TIMEZONE}")
     logger.info(f" Operating Hours: {config.START_HOUR:02d}:{config.START_MINUTE:02d} to {config.END_HOUR:02d}:{config.END_MINUTE:02d} (Every 1 minute)")
     logger.info(f" Telegram Broadcast: {'Configured' if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else 'Disabled'}")
-    logger.info(f" ntfy Topic: {config.NTFY_TOPIC or 'Disabled'}")
     logger.info("==================================================")
 
     while True:

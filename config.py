@@ -7,11 +7,6 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ntfy.sh Settings (Optional secondary notification channel)
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
-NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-NTFY_PRIORITY = os.getenv("NTFY_PRIORITY", "high")  # 'default', 'high', 'urgent'
-
 # Target CISIA Calendar Pages (English)
 TRACKED_PAGES = [
     {
