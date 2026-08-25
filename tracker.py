@@ -100,40 +100,40 @@ def parse_page_rows(html_content: str, page_info: dict) -> list[dict]:
         if len(tds) < 8:
             continue
 
-        # Column indices:
-        # 0: MODALITÀ
-        # 1: UNIVERSITÀ
-        # 2: REGIONE / STATO ESTERO
-        # 3: CITTÀ
-        # 4: FINE ISCRIZIONI
-        # 5: POSTI
-        # 6: STATO
-        # 7: DATA TEST
+        # Column indices on CISIA English calendar:
+        # 0: FORMAT (e.g. TOLC@HOME, CENT@HOME, TOLC@UNI)
+        # 1: UNIVERSITY
+        # 2: REGION / FOREIGN COUNTRY
+        # 3: CITY
+        # 4: BOOKINGS DEADLINE
+        # 5: SEATS
+        # 6: STATE (e.g. AVAILABLE SEATS, NOT LONGER AVAILABLE, NOT BOOKABLE, BOOKINGS CLOSED)
+        # 7: DATE
 
-        modalita = clean_text(tds[0].get_text())
-        universita = clean_text(tds[1].get_text())
-        regione = clean_text(tds[2].get_text())
-        citta = clean_text(tds[3].get_text())
-        fine_iscrizioni = clean_text(tds[4].get_text())
-        posti = clean_text(tds[5].get_text())
-        stato = clean_text(tds[6].get_text()).upper()
-        data_test = clean_text(tds[7].get_text())
+        test_format = clean_text(tds[0].get_text())
+        university = clean_text(tds[1].get_text())
+        region = clean_text(tds[2].get_text())
+        city = clean_text(tds[3].get_text())
+        deadline = clean_text(tds[4].get_text())
+        seats = clean_text(tds[5].get_text())
+        state = clean_text(tds[6].get_text()).upper()
+        test_date = clean_text(tds[7].get_text())
 
         # Create unique row identity key
-        key = f"{page_info['name']}|{modalita}|{universita}|{citta}|{data_test}"
+        key = f"{page_info['name']}|{test_format}|{university}|{city}|{test_date}"
 
         rows.append({
             "key": key,
             "test_type": page_info["name"],
             "url": page_info["url"],
-            "modalita": modalita,
-            "universita": universita,
-            "regione": regione,
-            "citta": citta,
-            "fine_iscrizioni": fine_iscrizioni,
-            "posti": posti,
-            "stato": stato,
-            "data_test": data_test
+            "format": test_format,
+            "university": university,
+            "region": region,
+            "city": city,
+            "deadline": deadline,
+            "seats": seats,
+            "state": state,
+            "date": test_date
         })
 
     return rows
@@ -169,21 +169,21 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
         return False
 
     if change_type == "new":
-        reason_text = "✨ <b>Nuova data aggiunta con posti disponibili!</b>"
+        reason_text = "✨ <b>New test date added with available seats!</b>"
     else:
-        reason_text = f"🔄 <b>Stato aggiornato:</b> <s>{old_status}</s> ➔ <b>POSTI DISPONIBILI</b>"
+        reason_text = f"🔄 <b>Status updated:</b> <s>{old_status}</s> ➔ <b>AVAILABLE SEATS</b>"
 
     message = (
-        f"🚨 <b>POSTI DISPONIBILI CISIA!</b>\n"
+        f"🚨 <b>CISIA AVAILABLE SEATS ALERT!</b>\n"
         f"📚 <b>Test:</b> {row['test_type']}\n\n"
         f"{reason_text}\n\n"
-        f"🏛 <b>Università:</b> {row['universita']}\n"
-        f"💻 <b>Modalità:</b> {row['modalita']}\n"
-        f"📍 <b>Città:</b> {row['citta']} ({row['regione']})\n"
-        f"📅 <b>Data Test:</b> <code>{row['data_test']}</code>\n"
-        f"🎟 <b>Posti:</b> <b>{row['posti']}</b>\n"
-        f"⏳ <b>Fine Iscrizioni:</b> {row['fine_iscrizioni']}\n"
-        f"⚡ <b>Stato:</b> {row['stato']}"
+        f"🏛 <b>University:</b> {row['university']}\n"
+        f"💻 <b>Format:</b> {row['format']}\n"
+        f"📍 <b>City:</b> {row['city']} ({row['region']})\n"
+        f"📅 <b>Test Date:</b> <code>{row['date']}</code>\n"
+        f"🎟 <b>Seats:</b> <b>{row['seats']}</b>\n"
+        f"⏳ <b>Bookings Deadline:</b> {row['deadline']}\n"
+        f"⚡ <b>State:</b> {row['state']}"
     )
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -198,8 +198,8 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
             "reply_markup": {
                 "inline_keyboard": [
                     [
-                        {"text": "🚀 Prenota su CISIA", "url": config.CISIA_LOGIN_URL},
-                        {"text": "📅 Apri Calendario", "url": row["url"]}
+                        {"text": "🚀 Book on CISIA", "url": config.CISIA_LOGIN_URL},
+                        {"text": "📅 Open Calendar", "url": row["url"]}
                     ]
                 ]
             }
@@ -207,7 +207,7 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
         try:
             res = requests.post(url, json=payload, timeout=10)
             res.raise_for_status()
-            logger.info(f"Telegram notification sent to chat_id '{cid}' for {row['universita']} ({row['data_test']})")
+            logger.info(f"Telegram notification sent to chat_id '{cid}' for {row['university']} ({row['date']})")
             sent_successfully += 1
         except Exception as e:
             logger.error(f"Failed to send Telegram notification to chat_id '{cid}': {e}")
@@ -225,22 +225,22 @@ def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
 
     url = f"{config.NTFY_SERVER}/{topic}"
 
-    title = f"🚨 Posti Disponibili! [{row['test_type']}]"
+    title = f"🚨 Available Seats! [{row['test_type']}]"
     
     if change_type == "new":
-        reason_text = "Nuova data aggiunta con posti disponibili!"
+        reason_text = "New test date added with available seats!"
     else:
-        reason_text = f"Stato aggiornato: {old_status} ➔ POSTI DISPONIBILI"
+        reason_text = f"Status updated: {old_status} ➔ AVAILABLE SEATS"
 
     body = (
         f"📢 {reason_text}\n\n"
-        f"🏛 Università: {row['universita']}\n"
-        f"💻 Modalità: {row['modalita']}\n"
-        f"📍 Città: {row['citta']} ({row['regione']})\n"
-        f"📅 Data Test: {row['data_test']}\n"
-        f"🎟 Posti: {row['posti']}\n"
-        f"⏳ Fine Iscrizioni: {row['fine_iscrizioni']}\n"
-        f"⚡ Stato: {row['stato']}"
+        f"🏛 University: {row['university']}\n"
+        f"💻 Format: {row['format']}\n"
+        f"📍 City: {row['city']} ({row['region']})\n"
+        f"📅 Test Date: {row['date']}\n"
+        f"🎟 Seats: {row['seats']}\n"
+        f"⏳ Bookings Deadline: {row['deadline']}\n"
+        f"⚡ State: {row['state']}"
     )
 
     headers = {
@@ -248,7 +248,7 @@ def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
         "Priority": config.NTFY_PRIORITY,
         "Tags": "bell,school,rotating_light",
         "Click": config.CISIA_LOGIN_URL,
-        "Actions": f"view, Prenota su CISIA, {config.CISIA_LOGIN_URL}; view, Apri Calendario, {row['url']}"
+        "Actions": f"view, Book on CISIA, {config.CISIA_LOGIN_URL}; view, Open Calendar, {row['url']}"
     }
 
     try:
@@ -259,7 +259,7 @@ def send_ntfy_alert(row: dict, change_type: str, old_status: str = "") -> bool:
             timeout=10
         )
         res.raise_for_status()
-        logger.info(f"Notification sent successfully to ntfy topic '{topic}' for {row['universita']} ({row['data_test']})")
+        logger.info(f"Notification sent successfully to ntfy topic '{topic}' for {row['university']} ({row['date']})")
         return True
     except Exception as e:
         logger.error(f"Failed to send ntfy notification: {e}")
@@ -298,15 +298,22 @@ def save_state(state: dict[str, dict]):
             os.remove(temp_file)
 
 
-def is_casa_modality(modalita: str) -> bool:
-    """Checks if modality is home-based (e.g. TOLC@CASA or CENT@CASA)."""
-    return "CASA" in (modalita or "").upper()
+def is_home_modality(format_str: str) -> bool:
+    """Checks if test format is home-based (e.g. TOLC@HOME, CENT@HOME, TOLC@CASA)."""
+    fmt = (format_str or "").upper()
+    return "HOME" in fmt or "CASA" in fmt
+
+
+def is_available_state(state_str: str) -> bool:
+    """Checks if state indicates available seats."""
+    st = (state_str or "").upper()
+    return "AVAILABLE SEATS" in st or "POSTI DISPONIBILI" in st
 
 
 def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tuple[dict[str, dict], int]:
     """
     Fetches all tracked pages, compares against previous state,
-    and dispatches notifications for newly available seats (TOLC@CASA / CENT@CASA only).
+    and dispatches notifications for newly available seats (TOLC@HOME / CENT@HOME only).
     Returns the updated state and count of alerts sent.
     """
     current_state = {}
@@ -324,34 +331,34 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
 
     if is_first_run and not previous_state:
         # First startup: record baseline state without notification spam
-        available_casa = sum(
+        available_home = sum(
             1 for r in current_state.values()
-            if is_casa_modality(r["modalita"]) and "POSTI DISPONIBILI" in r["stato"]
+            if is_home_modality(r["format"]) and is_available_state(r["state"])
         )
-        logger.info(f"Initialized baseline state with {len(current_state)} total rows ({available_casa} CASA seats currently available).")
+        logger.info(f"Initialized baseline state with {len(current_state)} total rows ({available_home} HOME seats currently available).")
         save_state(current_state)
         return current_state, 0
 
-    # Detect changes (Only notify for @CASA tests)
+    # Detect changes (Only notify for @HOME tests)
     for key, row in current_state.items():
-        is_available = "POSTI DISPONIBILI" in row["stato"]
-        is_casa = is_casa_modality(row.get("modalita", ""))
+        is_available = is_available_state(row["state"])
+        is_home = is_home_modality(row.get("format", ""))
 
         if key not in previous_state:
-            # Condition 1: New CASA row added with POSTI DISPONIBILI
-            if is_casa and is_available:
-                logger.info(f"NEW CASA ROW with available seats: {row['test_type']} | {row['universita']} | {row['data_test']}")
+            # Condition 1: New HOME row added with AVAILABLE SEATS
+            if is_home and is_available:
+                logger.info(f"NEW HOME ROW with available seats: {row['test_type']} | {row['university']} | {row['date']}")
                 if send_notifications(row, change_type="new"):
                     alerts_sent += 1
         else:
             old_row = previous_state[key]
-            old_stato = old_row.get("stato", "")
-            was_available = "POSTI DISPONIBILI" in old_stato
+            old_state = old_row.get("state", "")
+            was_available = is_available_state(old_state)
 
-            # Condition 2: Existing CASA row became POSTI DISPONIBILI from previous non-available status
-            if is_casa and is_available and not was_available:
-                logger.info(f"STATUS CHANGED to available for CASA: {row['test_type']} | {row['universita']} | {row['data_test']} (Old: {old_stato})")
-                if send_notifications(row, change_type="status_change", old_status=old_stato):
+            # Condition 2: Existing HOME row became AVAILABLE SEATS from previous unavailable state
+            if is_home and is_available and not was_available:
+                logger.info(f"STATUS CHANGED to available for HOME: {row['test_type']} | {row['university']} | {row['date']} (Old: {old_state})")
+                if send_notifications(row, change_type="status_change", old_status=old_state):
                     alerts_sent += 1
 
     save_state(current_state)
@@ -361,16 +368,16 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
 def send_test_notification():
     """Sends a sample test alert to verify notification setup."""
     sample_row = {
-        "test_type": "TOLC-I (Ingegneria) [TEST]",
-        "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
-        "modalita": "TOLC@CASA",
-        "universita": "Università di Prova (Test Alert)",
-        "regione": "LAZIO",
-        "citta": "ROMA",
-        "fine_iscrizioni": "01/09/2026",
-        "posti": "10",
-        "stato": "POSTI DISPONIBILI",
-        "data_test": "15/09/2026"
+        "test_type": "TOLC-I (Engineering) [TEST]",
+        "url": "https://testcisia.it/calendario.php?tolc=ingegneria&l=gb",
+        "format": "TOLC@HOME",
+        "university": "Sapienza University of Rome (Test Alert)",
+        "region": "LAZIO",
+        "city": "ROME",
+        "deadline": "01/09/2026",
+        "seats": "10",
+        "state": "AVAILABLE SEATS",
+        "date": "15/09/2026"
     }
     logger.info("Sending test notification across configured channels...")
     success = send_notifications(sample_row, change_type="new")
@@ -384,16 +391,16 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/test":
             sample_row = {
-                "test_type": "TOLC-I (Ingegneria) [TEST]",
-                "url": "https://testcisia.it/calendario.php?tolc=ingegneria",
-                "modalita": "TOLC@CASA",
-                "universita": "Sapienza Università di Roma (Test Alert)",
-                "regione": "LAZIO",
-                "citta": "ROMA",
-                "fine_iscrizioni": "01/09/2026",
-                "posti": "10",
-                "stato": "POSTI DISPONIBILI",
-                "data_test": "15/09/2026"
+                "test_type": "TOLC-I (Engineering) [TEST]",
+                "url": "https://testcisia.it/calendario.php?tolc=ingegneria&l=gb",
+                "format": "TOLC@HOME",
+                "university": "Sapienza University of Rome (Test Alert)",
+                "region": "LAZIO",
+                "city": "ROME",
+                "deadline": "01/09/2026",
+                "seats": "10",
+                "state": "AVAILABLE SEATS",
+                "date": "15/09/2026"
             }
             success = send_notifications(sample_row, change_type="new")
             self.send_response(200 if success else 500)

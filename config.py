@@ -12,19 +12,19 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_PRIORITY = os.getenv("NTFY_PRIORITY", "high")  # 'default', 'high', 'urgent'
 
-# Target CISIA Calendar Pages
+# Target CISIA Calendar Pages (English)
 TRACKED_PAGES = [
     {
-        "name": "TOLC-I (Ingegneria)",
-        "url": "https://testcisia.it/calendario.php?tolc=ingegneria"
+        "name": "TOLC-I (Engineering)",
+        "url": "https://testcisia.it/calendario.php?tolc=ingegneria&l=gb"
     },
     {
-        "name": "TOLC-E (Economia)",
-        "url": "https://testcisia.it/calendario.php?tolc=economia"
+        "name": "TOLC-E (Economics)",
+        "url": "https://testcisia.it/calendario.php?tolc=economia&l=gb"
     },
     {
-        "name": "CEnT-S (Inglese)",
-        "url": "https://testcisia.it/calendario.php?tolc=cents&lingua=inglese"
+        "name": "CEnT-S (English)",
+        "url": "https://testcisia.it/calendario.php?tolc=cents&l=gb&lingua=inglese"
     }
 ]
 

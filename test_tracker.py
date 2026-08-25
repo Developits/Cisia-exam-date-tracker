@@ -77,29 +77,29 @@ class TestParserAndChangeDetection(unittest.TestCase):
         <table id="calendario">
             <thead>
                 <tr>
-                    <th>MODALITÀ</th><th>UNIVERSITÀ</th><th>REGIONE</th><th>CITTÀ</th>
-                    <th>FINE ISCRIZIONI</th><th>POSTI</th><th>STATO</th><th>DATA TEST</th>
+                    <th>FORMAT</th><th>UNIVERSITY</th><th>REGION / FOREIGN COUNTRY</th><th>CITY</th>
+                    <th>BOOKINGS DEADLINE</th><th>SEATS</th><th>STATE</th><th>DATE</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
                     <td>TOLC@UNI</td>
-                    <td>Universita' di Pisa</td>
-                    <td>TOSCANA</td>
+                    <td>University of Pisa</td>
+                    <td>TUSCANY</td>
                     <td>PISA</td>
                     <td>26/08/2026</td>
                     <td>5</td>
-                    <td><span style="color: LimeGreen;">POSTI DISPONIBILI</span></td>
+                    <td><span style="color: LimeGreen;">AVAILABLE SEATS</span></td>
                     <td>01/09/2026</td>
                 </tr>
                 <tr>
-                    <td>TOLC@CASA</td>
-                    <td>Sapienza Università di Roma</td>
+                    <td>TOLC@HOME</td>
+                    <td>Sapienza University of Rome</td>
                     <td>LAZIO</td>
-                    <td>ROMA</td>
+                    <td>ROME</td>
                     <td>26/08/2026</td>
                     <td>---</td>
-                    <td><span style="color: Crimson;">POSTI ESAURITI</span></td>
+                    <td><span style="color: Crimson;">NOT LONGER AVAILABLE</span></td>
                     <td>01/09/2026</td>
                 </tr>
             </tbody>
@@ -107,8 +107,8 @@ class TestParserAndChangeDetection(unittest.TestCase):
         </body></html>
         """
         self.page_info = {
-            "name": "TOLC-I (Ingegneria)",
-            "url": "https://testcisia.it/calendario.php?tolc=ingegneria"
+            "name": "TOLC-I (Engineering)",
+            "url": "https://testcisia.it/calendario.php?tolc=ingegneria&l=gb"
         }
 
     def test_parse_page_rows(self):
@@ -116,16 +116,16 @@ class TestParserAndChangeDetection(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         
         row1 = rows[0]
-        self.assertEqual(row1["modalita"], "TOLC@UNI")
-        self.assertEqual(row1["universita"], "Universita' di Pisa")
-        self.assertEqual(row1["citta"], "PISA")
-        self.assertEqual(row1["posti"], "5")
-        self.assertEqual(row1["stato"], "POSTI DISPONIBILI")
-        self.assertEqual(row1["data_test"], "01/09/2026")
+        self.assertEqual(row1["format"], "TOLC@UNI")
+        self.assertEqual(row1["university"], "University of Pisa")
+        self.assertEqual(row1["city"], "PISA")
+        self.assertEqual(row1["seats"], "5")
+        self.assertEqual(row1["state"], "AVAILABLE SEATS")
+        self.assertEqual(row1["date"], "01/09/2026")
         
         row2 = rows[1]
-        self.assertEqual(row2["modalita"], "TOLC@CASA")
-        self.assertEqual(row2["stato"], "POSTI ESAURITI")
+        self.assertEqual(row2["format"], "TOLC@HOME")
+        self.assertEqual(row2["state"], "NOT LONGER AVAILABLE")
 
     @patch("tracker.send_notifications")
     @patch("tracker.save_state")
@@ -145,12 +145,12 @@ class TestParserAndChangeDetection(unittest.TestCase):
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
     def test_status_change_triggers_alert(self, mock_fetch, mock_save, mock_alert):
-        # Initial state where Sapienza had POSTI ESAURITI
+        # Initial state where Sapienza had NOT LONGER AVAILABLE
         parsed = tracker.parse_page_rows(self.sample_html, self.page_info)
         initial_state = {r["key"]: r for r in parsed}
 
-        # Updated HTML where Sapienza becomes POSTI DISPONIBILI
-        updated_html = self.sample_html.replace("POSTI ESAURITI", "POSTI DISPONIBILI")
+        # Updated HTML where Sapienza becomes AVAILABLE SEATS
+        updated_html = self.sample_html.replace("NOT LONGER AVAILABLE", "AVAILABLE SEATS")
         mock_fetch.return_value = tracker.parse_page_rows(updated_html, self.page_info)
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
@@ -159,7 +159,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         mock_alert.assert_called_once()
         args, kwargs = mock_alert.call_args
         self.assertEqual(kwargs["change_type"], "status_change")
-        self.assertEqual(kwargs["old_status"], "POSTI ESAURITI")
+        self.assertEqual(kwargs["old_status"], "NOT LONGER AVAILABLE")
 
     @patch("tracker.send_notifications", return_value=True)
     @patch("tracker.save_state")
@@ -168,8 +168,8 @@ class TestParserAndChangeDetection(unittest.TestCase):
         parsed = tracker.parse_page_rows(self.sample_html, self.page_info)
         initial_state = {parsed[0]["key"]: parsed[0]}  # only Pisa initially
 
-        # Current returns Pisa + Sapienza (which has POSTI DISPONIBILI and is TOLC@CASA)
-        updated_html = self.sample_html.replace("POSTI ESAURITI", "POSTI DISPONIBILI")
+        # Current returns Pisa + Sapienza (which has AVAILABLE SEATS and is TOLC@HOME)
+        updated_html = self.sample_html.replace("NOT LONGER AVAILABLE", "AVAILABLE SEATS")
         mock_fetch.return_value = tracker.parse_page_rows(updated_html, self.page_info)
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
@@ -186,11 +186,11 @@ class TestParserAndChangeDetection(unittest.TestCase):
         # Pisa is TOLC@UNI
         parsed = tracker.parse_page_rows(self.sample_html, self.page_info)
         initial_pisa = dict(parsed[0])
-        initial_pisa["stato"] = "POSTI ESAURITI"
+        initial_pisa["state"] = "NOT LONGER AVAILABLE"
         initial_state = {initial_pisa["key"]: initial_pisa}
 
-        # Current returns Pisa with POSTI DISPONIBILI, but it's TOLC@UNI so should NOT alert
-        mock_fetch.return_value = [parsed[0]]  # Pisa TOLC@UNI POSTI DISPONIBILI
+        # Current returns Pisa with AVAILABLE SEATS, but it's TOLC@UNI so should NOT alert
+        mock_fetch.return_value = [parsed[0]]  # Pisa TOLC@UNI AVAILABLE SEATS
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
 
@@ -200,23 +200,23 @@ class TestParserAndChangeDetection(unittest.TestCase):
     @patch("tracker.send_notifications", return_value=True)
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
-    def test_cent_casa_modality_triggers_alert(self, mock_fetch, mock_save, mock_alert):
-        # CEnT-S CENT@CASA test
+    def test_cent_home_modality_triggers_alert(self, mock_fetch, mock_save, mock_alert):
+        # CEnT-S CENT@HOME test
         cent_row = {
-            "key": "CEnT-S (Inglese)|CENT@CASA|Sapienza Università di Roma|ROMA|15/09/2026",
-            "test_type": "CEnT-S (Inglese)",
-            "url": "https://testcisia.it/calendario.php?tolc=cents&lingua=inglese",
-            "modalita": "CENT@CASA",
-            "universita": "Sapienza Università di Roma",
-            "regione": "LAZIO",
-            "citta": "ROMA",
-            "fine_iscrizioni": "01/09/2026",
-            "posti": "5",
-            "stato": "POSTI DISPONIBILI",
-            "data_test": "15/09/2026"
+            "key": "CEnT-S (English)|CENT@HOME|Sapienza University of Rome|ROME|15/09/2026",
+            "test_type": "CEnT-S (English)",
+            "url": "https://testcisia.it/calendario.php?tolc=cents&l=gb&lingua=inglese",
+            "format": "CENT@HOME",
+            "university": "Sapienza University of Rome",
+            "region": "LAZIO",
+            "city": "ROME",
+            "deadline": "01/09/2026",
+            "seats": "5",
+            "state": "AVAILABLE SEATS",
+            "date": "15/09/2026"
         }
         old_cent = dict(cent_row)
-        old_cent["stato"] = "POSTI ESAURITI"
+        old_cent["state"] = "NOT LONGER AVAILABLE"
 
         mock_fetch.return_value = [cent_row]
         state, alerts = tracker.run_check_cycle(previous_state={old_cent["key"]: old_cent}, is_first_run=False)
