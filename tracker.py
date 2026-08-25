@@ -199,16 +199,15 @@ def send_telegram_alert(row: dict, change_type: str, old_status: str = "") -> bo
         reason_text = f"🔄 <b>Status updated:</b> <s>{escaped_old}</s> ➔ <b>AVAILABLE SEATS</b>"
 
     message = (
-        f"🚨 <b>CISIA AVAILABLE SEATS ALERT!</b>\n"
-        f"📚 <b>Test:</b> {html.escape(row['test_type'])}\n\n"
+        f"🚨 <b>{html.escape(row['test_type'])} {html.escape(row['seats'])} SEATS AVAILABLE ALERT!</b>\n\n"
         f"{reason_text}\n\n"
         f"🏛 <b>University:</b> {html.escape(row['university'])}\n"
         f"💻 <b>Format:</b> {html.escape(row['format'])}\n"
         f"📍 <b>City:</b> {html.escape(row['city'])} ({html.escape(row['region'])})\n"
-        f"📅 <b>Test Date:</b> <code>{html.escape(row['date'])}</code>\n"
-        f"🎟 <b>Seats:</b> <b>{html.escape(row['seats'])}</b>\n"
+        f"📅 <b>Test Date:</b> {html.escape(row['date'])}\n"
+        f"🎟 <b>Seats:</b> {html.escape(row['seats'])}\n"
         f"⏳ <b>Bookings Deadline:</b> {html.escape(row['deadline'])}\n"
-        f"⚡ <b>State:</b> {html.escape(row['state'])}"
+        f"⚡️ <b>State:</b> {html.escape(row['state'])}"
     )
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
