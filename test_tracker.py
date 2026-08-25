@@ -131,7 +131,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
     @patch("tracker.save_state")
     @patch("tracker.fetch_page")
     def test_first_run_silent_initialization(self, mock_fetch, mock_save, mock_alert):
-        mock_fetch.return_value = tracker.parse_page_rows(self.sample_html, self.page_info)
+        mock_fetch.side_effect = lambda page: tracker.parse_page_rows(self.sample_html, page) if page["name"] == "TOLC-I (Engineering)" else []
         
         # Empty previous state and is_first_run=True
         state, alerts = tracker.run_check_cycle(previous_state={}, is_first_run=True)
@@ -151,7 +151,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
 
         # Updated HTML where Sapienza becomes AVAILABLE SEATS
         updated_html = self.sample_html.replace("NOT LONGER AVAILABLE", "AVAILABLE SEATS")
-        mock_fetch.return_value = tracker.parse_page_rows(updated_html, self.page_info)
+        mock_fetch.side_effect = lambda page: tracker.parse_page_rows(updated_html, page) if page["name"] == "TOLC-I (Engineering)" else []
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
 
@@ -170,7 +170,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
 
         # Current returns Pisa + Sapienza (which has AVAILABLE SEATS and is TOLC@HOME)
         updated_html = self.sample_html.replace("NOT LONGER AVAILABLE", "AVAILABLE SEATS")
-        mock_fetch.return_value = tracker.parse_page_rows(updated_html, self.page_info)
+        mock_fetch.side_effect = lambda page: tracker.parse_page_rows(updated_html, page) if page["name"] == "TOLC-I (Engineering)" else []
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
 
@@ -190,7 +190,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         initial_state = {initial_pisa["key"]: initial_pisa}
 
         # Current returns Pisa with AVAILABLE SEATS, but it's TOLC@UNI so should NOT alert
-        mock_fetch.return_value = [parsed[0]]  # Pisa TOLC@UNI AVAILABLE SEATS
+        mock_fetch.side_effect = lambda page: [parsed[0]] if page["name"] == "TOLC-I (Engineering)" else []
 
         state, alerts = tracker.run_check_cycle(previous_state=initial_state, is_first_run=False)
 
@@ -203,7 +203,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
     def test_cent_home_modality_triggers_alert(self, mock_fetch, mock_save, mock_alert):
         # CEnT-S CENT@HOME test
         cent_row = {
-            "key": "CEnT-S (English)|CENT@HOME|Sapienza University of Rome|ROME|15/09/2026",
+            "key": "CEnT-S (English)|CENT@HOME|Sapienza University of Rome|ROME|15/09/2026|01/09/2026#1",
             "test_type": "CEnT-S (English)",
             "url": "https://testcisia.it/calendario.php?tolc=cents&l=gb&lingua=inglese",
             "format": "CENT@HOME",
@@ -218,7 +218,7 @@ class TestParserAndChangeDetection(unittest.TestCase):
         old_cent = dict(cent_row)
         old_cent["state"] = "NOT LONGER AVAILABLE"
 
-        mock_fetch.return_value = [cent_row]
+        mock_fetch.side_effect = lambda page: [cent_row] if page["name"] == "CEnT-S (English)" else []
         state, alerts = tracker.run_check_cycle(previous_state={old_cent["key"]: old_cent}, is_first_run=False)
 
         self.assertEqual(alerts, 1)
