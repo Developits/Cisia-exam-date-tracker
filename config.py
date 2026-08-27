@@ -6,10 +6,16 @@ load_dotenv()
 # Telegram Bot Settings
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Dedicated Interactive Filter Bot Token (defaults to TELEGRAM_BOT_TOKEN if not explicitly provided)
+FILTER_BOT_TOKEN = os.getenv("FILTER_BOT_TOKEN", "").strip() or TELEGRAM_BOT_TOKEN
 # Developer ID for error logs and crash reports (Mr Marshmallow)
 DEVELOPER_CHAT_ID = os.getenv("DEVELOPER_CHAT_ID", "1720364178")
 # Throttle repeated error notifications (seconds) to prevent spam
 ERROR_THROTTLE_SECONDS = int(os.getenv("ERROR_THROTTLE_SECONDS", "900"))  # 15 minutes
+# Per-user alert cooldown for identical seat row (seconds)
+ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))  # 1 hour
+# Database path for user subscriptions and filters
+DB_PATH = os.getenv("DB_PATH", "subscriptions.db")
 
 # Target CISIA Calendar Pages (English)
 TRACKED_PAGES = [

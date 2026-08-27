@@ -1,11 +1,17 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.env
 .env
 .venv/
-env/
 venv/
-*.tmp
-state.json
-.DS_Store
+ENV/
+
+# Database and State
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+test_*.db
+state.json.tmp

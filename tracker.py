@@ -23,6 +23,9 @@ from urllib3.util import Retry
 from bs4 import BeautifulSoup
 
 import config
+import db
+import dispatcher
+from bot import bot_instance
 
 # Setup logging
 logging.basicConfig(
@@ -302,8 +305,10 @@ def send_developer_error_alert(error_title: str, error_detail: str, traceback_st
 
 
 def send_notifications(row: dict, change_type: str, old_status: str = "") -> bool:
-    """Dispatches notifications to configured Telegram chat IDs."""
-    return send_telegram_alert(row, change_type, old_status)
+    """Dispatches notifications to both broadcast channels and personalized user filters."""
+    broadcast_sent = send_telegram_alert(row, change_type, old_status)
+    personalized_alerts = dispatcher.dispatch_personalized_alerts(row, change_type, old_status)
+    return broadcast_sent or (personalized_alerts > 0)
 
 
 def load_state() -> dict[str, dict]:
@@ -415,6 +420,14 @@ def run_check_cycle(previous_state: dict[str, dict], is_first_run: bool) -> tupl
 
     if pages_successfully_fetched > 0:
         save_state(updated_state)
+
+    # Check for expired filters and dispatch renewal prompts
+    try:
+        expired_filters = db.check_and_expire_filters()
+        if expired_filters:
+            dispatcher.dispatch_expiration_alerts(expired_filters)
+    except Exception as e:
+        logger.error(f"Error checking expired filters: {e}")
 
     return updated_state, alerts_sent
 
@@ -554,14 +567,21 @@ def main():
         logger.info(f"Cycle completed. Alerts sent: {alerts}")
         return
 
+    # Initialize SQLite database
+    db.init_db()
+
     # Start health check server for Render/Cloud hosts
     start_health_server()
+
+    # Start interactive filter bot poller thread
+    bot_instance.start_polling_in_thread()
 
     logger.info("==================================================")
     logger.info("       CISIA TOLC Availability Tracker Starting    ")
     logger.info(f" Timezone: {config.TIMEZONE}")
     logger.info(f" Operating Hours: {config.START_HOUR:02d}:{config.START_MINUTE:02d} to {config.END_HOUR:02d}:{config.END_MINUTE:02d} (Every 1 minute)")
     logger.info(f" Telegram Broadcast: {'Configured' if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else 'Disabled'}")
+    logger.info(f" Interactive Filter Bot: {'Configured' if config.FILTER_BOT_TOKEN else 'Disabled'}")
     logger.info(f" Developer Error Alert ID: {config.DEVELOPER_CHAT_ID or 'Disabled'}")
     logger.info("==================================================")
 
