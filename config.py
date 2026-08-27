@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,7 +8,13 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Dedicated Interactive Filter Bot Token (defaults to TELEGRAM_BOT_TOKEN if not explicitly provided)
-FILTER_BOT_TOKEN = os.getenv("FILTER_BOT_TOKEN", "").strip() or TELEGRAM_BOT_TOKEN
+_filter_bot_env = os.getenv("FILTER_BOT_TOKEN", "").strip()
+FILTER_BOT_TOKEN = _filter_bot_env or TELEGRAM_BOT_TOKEN
+if not _filter_bot_env and TELEGRAM_BOT_TOKEN:
+    logging.getLogger("CISIA-Config").warning(
+        "FILTER_BOT_TOKEN not explicitly set — falling back to TELEGRAM_BOT_TOKEN. "
+        "Both bots will share the same token and respond to the same users."
+    )
 # Developer ID for error logs and crash reports (Mr Marshmallow)
 DEVELOPER_CHAT_ID = os.getenv("DEVELOPER_CHAT_ID", "1720364178")
 # Throttle repeated error notifications (seconds) to prevent spam

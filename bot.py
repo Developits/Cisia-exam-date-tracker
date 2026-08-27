@@ -3,6 +3,13 @@
 Interactive Telegram Bot for CISIA Custom Seat Filters.
 Provides an interactive Inline Keyboard Wizard for setting up custom exam filters,
 managing active trackers, immediate availability lookups, and receiving push notifications.
+
+Wizard Flow:
+  Step 1 — Exam Type (multi-select toggle checkboxes, comma-separated OR logic)
+  Step 2 — University (Any / Type custom name with word-boundary fuzzy match)
+  Step 3 — Date Range (presets or custom text input)
+  Step 4 — Duration (7/14/30/60 days or indefinite)
+  → Finalize: save to DB + immediate seat scan
 """
 
 import sys
@@ -23,8 +30,27 @@ import dispatcher
 
 logger = logging.getLogger("CISIA-Bot")
 
-# In-memory wizard conversation state: {user_id: {"step": str, "data": dict, "msg_id": int}}
+# In-memory wizard conversation state: {user_id: {step, data, msg_id}}
+# NOTE: This is reset on process restart (Render redeploys). Wizard state is intentionally ephemeral.
 user_sessions: dict[int, dict] = {}
+
+# All exam types available for tracking
+EXAM_TYPES = [
+    "TOLC-I (Engineering)",
+    "TOLC-E (Economics)",
+    "CEnT-S (English)",
+]
+
+# Maximum message length Telegram allows (4096 chars); we target a safe margin
+_TELEGRAM_MAX_CHARS = 3900
+
+
+def _truncate_for_telegram(text: str, max_chars: int = _TELEGRAM_MAX_CHARS) -> str:
+    """Truncates a message to stay under Telegram's 4096-char limit."""
+    if len(text) <= max_chars:
+        return text
+    suffix = "\n\n<i>...message truncated to fit Telegram limits. Use /mytrackers to view all.</i>"
+    return text[:max_chars - len(suffix)] + suffix
 
 
 class TelegramBot:
@@ -54,10 +80,10 @@ class TelegramBot:
             return None
 
     def send_message(self, chat_id: int | str, text: str, reply_markup: dict = None) -> dict | None:
-        """Sends an HTML formatted message."""
+        """Sends an HTML formatted message (auto-truncated to Telegram limits)."""
         payload = {
             "chat_id": chat_id,
-            "text": text,
+            "text": _truncate_for_telegram(text),
             "parse_mode": "HTML",
             "disable_web_page_preview": False
         }
@@ -66,11 +92,11 @@ class TelegramBot:
         return self.api_call("sendMessage", payload)
 
     def edit_message_text(self, chat_id: int | str, message_id: int, text: str, reply_markup: dict = None) -> dict | None:
-        """Edits an existing message's text and markup."""
+        """Edits an existing message's text and markup (auto-truncated to Telegram limits)."""
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": text,
+            "text": _truncate_for_telegram(text),
             "parse_mode": "HTML",
             "disable_web_page_preview": True
         }
@@ -141,50 +167,76 @@ class TelegramBot:
         else:
             self.send_message(chat_id, text, markup)
 
+    # ---------------------------------------------------------
+    # Wizard Step 1: Multi-select Exam Type
+    # ---------------------------------------------------------
+
+    def _build_exam_type_markup(self, selected: list[str]) -> dict:
+        """Builds the toggle checkbox keyboard for exam type selection."""
+        buttons = []
+        for exam in EXAM_TYPES:
+            is_on = exam in selected
+            icon = "☑️" if is_on else "☐"
+            buttons.append([{"text": f"{icon} {exam}", "callback_data": f"wiz_toggle_{exam}"}])
+
+        # Quick-select row
+        buttons.append([
+            {"text": "✨ Select All", "callback_data": "wiz_exam_all"},
+            {"text": "🗑 Clear All", "callback_data": "wiz_exam_clear"}
+        ])
+
+        # Confirm (only enabled if at least one is selected)
+        if selected:
+            buttons.append([{"text": f"Done → ({len(selected)} selected)", "callback_data": "wiz_exam_confirm"}])
+        else:
+            buttons.append([{"text": "⚠️ Select at least one exam", "callback_data": "wiz_noop"}])
+
+        buttons.append([{"text": "❌ Cancel", "callback_data": "menu_main"}])
+        return {"inline_keyboard": buttons}
+
     def start_wizard(self, chat_id: int, user_id: int, message_id: int = None):
-        """Step 1: Select Exam Type."""
+        """Step 1: Select Exam Type (multi-select toggle checkboxes)."""
         user_sessions[user_id] = {
             "step": "exam_type",
-            "data": {}
+            "data": {"selected_exams": []}
         }
         text = (
-            f"🎓 <b>Step 1/4: Choose Exam Type</b>\n\n"
-            f"Which exam do you want to track?"
+            f"🎓 <b>Step 1/4: Choose Exam Type(s)</b>\n\n"
+            f"Tap to toggle each exam type you want to track.\n"
+            f"You can select <b>multiple</b> exam types in one tracker!"
         )
-        markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "🔬 TOLC-I (Engineering)", "callback_data": "wiz_exam_TOLC-I (Engineering)"},
-                ],
-                [
-                    {"text": "📊 TOLC-E (Economics)", "callback_data": "wiz_exam_TOLC-E (Economics)"},
-                ],
-                [
-                    {"text": "🌐 CEnT-S (English)", "callback_data": "wiz_exam_CEnT-S (English)"},
-                ],
-                [
-                    {"text": "✨ All Exams", "callback_data": "wiz_exam_ALL"}
-                ],
-                [
-                    {"text": "❌ Cancel", "callback_data": "menu_main"}
-                ]
-            ]
-        }
+        markup = self._build_exam_type_markup([])
         if message_id:
             self.edit_message_text(chat_id, message_id, text, markup)
         else:
             self.send_message(chat_id, text, markup)
 
+    def _refresh_exam_type_screen(self, chat_id: int, user_id: int, message_id: int):
+        """Re-renders the exam type step with current toggle state."""
+        sess = user_sessions.get(user_id, {})
+        selected = sess.get("data", {}).get("selected_exams", [])
+        text = (
+            f"🎓 <b>Step 1/4: Choose Exam Type(s)</b>\n\n"
+            f"Tap to toggle each exam type you want to track.\n"
+            f"You can select <b>multiple</b> exam types in one tracker!"
+        )
+        markup = self._build_exam_type_markup(selected)
+        self.edit_message_text(chat_id, message_id, text, markup)
+
+    # ---------------------------------------------------------
+    # Wizard Step 2: University (Any / Type Custom)
+    # ---------------------------------------------------------
+
     def show_university_step(self, chat_id: int, user_id: int, message_id: int):
         """Step 2: Select University."""
         sess = user_sessions.get(user_id, {})
         sess["step"] = "university"
-        exam = sess.get("data", {}).get("exam_type", "Exam")
+        exams_str = ", ".join(sess.get("data", {}).get("selected_exams", [])) or "All Exams"
 
         text = (
             f"🏛 <b>Step 2/4: Choose University</b>\n\n"
-            f"Target Exam: <b>{html.escape(exam)}</b>\n\n"
-            f"Select your university from the popular options below, or tap ✏️ to type any university:"
+            f"Target Exam(s): <b>{html.escape(exams_str)}</b>\n\n"
+            f"Select <b>Any University</b> to track all locations, or type a specific university name:"
         )
         markup = {
             "inline_keyboard": [
@@ -192,19 +244,7 @@ class TelegramBot:
                     {"text": "🌐 Any University (All Locations)", "callback_data": "wiz_uni_ANY"}
                 ],
                 [
-                    {"text": "🏛 Sapienza (Rome)", "callback_data": "wiz_uni_Sapienza"},
-                    {"text": "🏛 Bologna", "callback_data": "wiz_uni_Bologna"}
-                ],
-                [
-                    {"text": "🏛 Politecnico Milano", "callback_data": "wiz_uni_Politecnico Milano"},
-                    {"text": "🏛 Pisa", "callback_data": "wiz_uni_Pisa"}
-                ],
-                [
-                    {"text": "🏛 Padua", "callback_data": "wiz_uni_Padua"},
-                    {"text": "🏛 Turin (PoliTo)", "callback_data": "wiz_uni_Torino"}
-                ],
-                [
-                    {"text": "✏️ Type Custom University Name", "callback_data": "wiz_uni_custom"}
+                    {"text": "✏️ Type University Name", "callback_data": "wiz_uni_custom"}
                 ],
                 [
                     {"text": "🔙 Back", "callback_data": "wizard_start"}
@@ -213,16 +253,21 @@ class TelegramBot:
         }
         self.edit_message_text(chat_id, message_id, text, markup)
 
-    def show_date_range_step(self, chat_id: int, user_id: int, message_id: int):
+    # ---------------------------------------------------------
+    # Wizard Step 3: Date Range
+    # ---------------------------------------------------------
+
+    def show_date_range_step(self, chat_id: int, user_id: int, message_id: int = None):
         """Step 3: Select Date Range."""
         sess = user_sessions.get(user_id, {})
         sess["step"] = "date_range"
         data = sess.get("data", {})
+        exams_str = ", ".join(data.get("selected_exams", [])) or "All Exams"
 
         text = (
             f"📅 <b>Step 3/4: Choose Exam Date Range</b>\n\n"
-            f"• Exam: <b>{html.escape(data.get('exam_type', ''))}</b>\n"
-            f"• University: <b>{html.escape(data.get('university_query', ''))}</b>\n\n"
+            f"• Exam(s): <b>{html.escape(exams_str)}</b>\n"
+            f"• University: <b>{html.escape(data.get('university_query', 'Any'))}</b>\n\n"
             f"Which test dates are you interested in?"
         )
         markup = {
@@ -235,7 +280,7 @@ class TelegramBot:
                     {"text": "📅 Next 60 Days", "callback_data": "wiz_date_60d"}
                 ],
                 [
-                    {"text": "🗓 August - September", "callback_data": "wiz_date_aug_sep"}
+                    {"text": "🗓 August – September", "callback_data": "wiz_date_aug_sep"}
                 ],
                 [
                     {"text": "✏️ Type Custom Date Range", "callback_data": "wiz_date_custom"}
@@ -245,22 +290,33 @@ class TelegramBot:
                 ]
             ]
         }
-        self.edit_message_text(chat_id, message_id, text, markup)
+        if message_id:
+            self.edit_message_text(chat_id, message_id, text, markup)
+        else:
+            self.send_message(chat_id, text, markup)
 
-    def show_duration_step(self, chat_id: int, user_id: int, message_id: int):
+    # ---------------------------------------------------------
+    # Wizard Step 4: Duration
+    # ---------------------------------------------------------
+
+    def show_duration_step(self, chat_id: int, user_id: int, message_id: int = None):
         """Step 4: Select Tracker Duration."""
         sess = user_sessions.get(user_id, {})
         sess["step"] = "duration"
         data = sess.get("data", {})
+        exams_str = ", ".join(data.get("selected_exams", [])) or "All Exams"
 
-        date_str = "Any Upcoming"
-        if data.get("start_date") or data.get("end_date"):
-            date_str = f"{data.get('start_date', 'Any')} to {data.get('end_date', 'Any')}"
+        start_d = data.get("start_date")
+        end_d = data.get("end_date")
+        if start_d or end_d:
+            date_str = f"{start_d or 'Any'} to {end_d or 'Any'}"
+        else:
+            date_str = "Any Upcoming"
 
         text = (
             f"⏳ <b>Step 4/4: Tracking Duration</b>\n\n"
-            f"• Exam: <b>{html.escape(data.get('exam_type', ''))}</b>\n"
-            f"• University: <b>{html.escape(data.get('university_query', ''))}</b>\n"
+            f"• Exam(s): <b>{html.escape(exams_str)}</b>\n"
+            f"• University: <b>{html.escape(data.get('university_query', 'Any'))}</b>\n"
             f"• Dates: <b>{html.escape(date_str)}</b>\n\n"
             f"How long should this tracker stay active?"
         )
@@ -282,7 +338,14 @@ class TelegramBot:
                 ]
             ]
         }
-        self.edit_message_text(chat_id, message_id, text, markup)
+        if message_id:
+            self.edit_message_text(chat_id, message_id, text, markup)
+        else:
+            self.send_message(chat_id, text, markup)
+
+    # ---------------------------------------------------------
+    # Wizard Finalize
+    # ---------------------------------------------------------
 
     def finalize_filter_creation(self, chat_id: int, user_id: int, message_id: int):
         """Saves the filter and performs an immediate search on current state."""
@@ -292,7 +355,8 @@ class TelegramBot:
             return
 
         data = sess["data"]
-        exam_type = data.get("exam_type", "ALL")
+        selected_exams = data.get("selected_exams", [])
+        exam_type = ",".join(selected_exams) if selected_exams else "ALL"
         university = data.get("university_query", "ANY")
         start_date = data.get("start_date")
         end_date = data.get("end_date")
@@ -308,8 +372,11 @@ class TelegramBot:
             db_path=self.db_path
         )
 
-        date_window_str = f"{start_date} to {end_date}" if start_date or end_date else "Any upcoming date"
+        start_d = start_date or "Any"
+        end_d = end_date or "Any"
+        date_window_str = f"{start_d} to {end_d}" if (start_date or end_date) else "Any upcoming date"
         duration_str = f"{duration_days} Days" if duration_days and duration_days > 0 else "Indefinite (Until stopped)"
+        exams_display = ", ".join(selected_exams) if selected_exams else "All Exams"
 
         # Load current state to do immediate search
         state = {}
@@ -342,7 +409,7 @@ class TelegramBot:
         text = (
             f"✅ <b>Tracker #{filter_id} Created Successfully!</b>\n\n"
             f"📋 <b>Your Filter Settings:</b>\n"
-            f"• <b>Exam:</b> {html.escape(exam_type)}\n"
+            f"• <b>Exam(s):</b> {html.escape(exams_display)}\n"
             f"• <b>University:</b> {html.escape(university)}\n"
             f"• <b>Date Window:</b> {html.escape(date_window_str)}\n"
             f"• <b>Duration:</b> {html.escape(duration_str)}\n"
@@ -359,8 +426,12 @@ class TelegramBot:
 
         self.edit_message_text(chat_id, message_id, text, {"inline_keyboard": buttons})
 
+    # ---------------------------------------------------------
+    # Dashboard: My Trackers
+    # ---------------------------------------------------------
+
     def show_user_trackers(self, chat_id: int, user_id: int, message_id: int = None):
-        """Displays dashboard of user's active/paused trackers with management buttons."""
+        """Displays dashboard of user's trackers with management buttons."""
         filters = db.get_user_filters(user_id, include_inactive=True, db_path=self.db_path)
 
         if not filters:
@@ -381,20 +452,26 @@ class TelegramBot:
                 self.send_message(chat_id, text, markup)
             return
 
+        now_rome = datetime.now(ZoneInfo(config.TIMEZONE))
         text = f"📋 <b>Your Trackers ({len(filters)})</b>\n\n"
         buttons = []
-
-        now_rome = datetime.now(ZoneInfo(config.TIMEZONE))
 
         for f in filters:
             fid = f["id"]
             status_icon = "🟢" if f["status"] == "active" else ("⏸" if f["status"] == "paused" else "⏳")
-            dates = f"{f['start_date']} to {f['end_date']}" if f["start_date"] or f["end_date"] else "Any upcoming date"
+
+            # Safe date display — handle None start/end dates
+            start_d = f.get("start_date") or "Any"
+            end_d = f.get("end_date") or "Any"
+            dates = f"{start_d} to {end_d}" if (f.get("start_date") or f.get("end_date")) else "Any upcoming date"
 
             expiry_text = "Indefinite"
             if f.get("expires_at"):
                 try:
                     exp_dt = datetime.fromisoformat(f["expires_at"])
+                    # Ensure both datetimes are timezone-aware for comparison
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=ZoneInfo(config.TIMEZONE))
                     remaining = exp_dt - now_rome
                     if remaining.total_seconds() > 0:
                         days = remaining.days
@@ -405,9 +482,12 @@ class TelegramBot:
                 except Exception:
                     pass
 
+            # Multi-exam display
+            exam_display = f.get("exam_type", "ALL").replace(",", ", ")
+
             text += (
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"{status_icon} <b>Tracker #{fid}: {html.escape(f['exam_type'])}</b>\n"
+                f"{status_icon} <b>Tracker #{fid}: {html.escape(exam_display)}</b>\n"
                 f"🏛 <b>University:</b> {html.escape(f['university_query'])}\n"
                 f"📅 <b>Dates:</b> {html.escape(dates)}\n"
                 f"⏳ <b>Status:</b> {html.escape(f['status'].upper())} ({expiry_text})\n"
@@ -432,6 +512,10 @@ class TelegramBot:
             self.edit_message_text(chat_id, message_id, text, markup)
         else:
             self.send_message(chat_id, text, markup)
+
+    # ---------------------------------------------------------
+    # Instant Seat Check
+    # ---------------------------------------------------------
 
     def show_instant_check(self, chat_id: int, message_id: int = None):
         """Displays currently available @HOME seats across all tracked calendars."""
@@ -483,6 +567,22 @@ class TelegramBot:
     # Updates & Event Handling
     # ---------------------------------------------------------
 
+    def _require_session(self, user_id: int, callback_query_id: str, chat_id: int, msg_id: int) -> bool:
+        """
+        Guard: if the user has no in-memory session (e.g. after a Render restart),
+        shows a friendly error and prompts them to restart the wizard.
+        Returns True if session is valid, False if guard triggered.
+        """
+        if user_id not in user_sessions:
+            self.answer_callback_query(
+                callback_query_id,
+                "⚠️ Session expired (bot restarted). Starting fresh...",
+                show_alert=True
+            )
+            self.start_wizard(chat_id, user_id, msg_id)
+            return False
+        return True
+
     def handle_callback_query(self, query: dict):
         """Dispatches callback queries from inline buttons."""
         query_id = query.get("id")
@@ -500,6 +600,7 @@ class TelegramBot:
             db_path=self.db_path
         )
 
+        # ── Navigation ──────────────────────────────────────────────
         if data == "menu_main":
             self.answer_callback_query(query_id)
             self.show_main_menu(chat_id, user, msg_id)
@@ -525,21 +626,64 @@ class TelegramBot:
             self.start_wizard(chat_id, user_id, msg_id)
             return
 
-        if data.startswith("wiz_exam_"):
-            exam = data.replace("wiz_exam_", "")
-            if user_id not in user_sessions:
-                user_sessions[user_id] = {"step": "exam_type", "data": {}}
-            user_sessions[user_id]["data"]["exam_type"] = exam
-            self.answer_callback_query(query_id, f"Selected: {exam}")
+        # No-op button (e.g. "Select at least one exam" hint)
+        if data == "wiz_noop":
+            self.answer_callback_query(query_id, "Please select at least one exam type first.")
+            return
+
+        # ── Step 1: Exam Type Toggle ─────────────────────────────────
+        if data.startswith("wiz_toggle_"):
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
+            exam = data.replace("wiz_toggle_", "")
+            sess = user_sessions[user_id]
+            selected = sess["data"].setdefault("selected_exams", [])
+            if exam in selected:
+                selected.remove(exam)
+            else:
+                selected.append(exam)
+            self.answer_callback_query(query_id, f"{'☑️ Added' if exam in selected else '☐ Removed'}: {exam}")
+            self._refresh_exam_type_screen(chat_id, user_id, msg_id)
+            return
+
+        if data == "wiz_exam_all":
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
+            user_sessions[user_id]["data"]["selected_exams"] = list(EXAM_TYPES)
+            self.answer_callback_query(query_id, "All exams selected!")
+            self._refresh_exam_type_screen(chat_id, user_id, msg_id)
+            return
+
+        if data == "wiz_exam_clear":
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
+            user_sessions[user_id]["data"]["selected_exams"] = []
+            self.answer_callback_query(query_id, "Selection cleared.")
+            self._refresh_exam_type_screen(chat_id, user_id, msg_id)
+            return
+
+        if data == "wiz_exam_confirm":
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
+            selected = user_sessions[user_id]["data"].get("selected_exams", [])
+            if not selected:
+                self.answer_callback_query(query_id, "Please select at least one exam type.", show_alert=True)
+                return
+            self.answer_callback_query(query_id, f"Exam(s) confirmed: {', '.join(selected)}")
             self.show_university_step(chat_id, user_id, msg_id)
             return
 
         if data == "wiz_back_to_uni":
             self.answer_callback_query(query_id)
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
             self.show_university_step(chat_id, user_id, msg_id)
             return
 
+        # ── Step 2: University ───────────────────────────────────────
         if data.startswith("wiz_uni_"):
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
             uni = data.replace("wiz_uni_", "")
             if uni == "custom":
                 user_sessions[user_id]["step"] = "waiting_uni_text"
@@ -547,10 +691,12 @@ class TelegramBot:
                 self.answer_callback_query(query_id)
                 prompt = (
                     f"✏️ <b>Type Your Target University</b>\n\n"
-                    f"Reply with the university or city name (e.g. <i>Sapienza, Bologna, Milan, Pisa, Rome</i>):"
+                    f"Reply with the university or city name.\n"
+                    f"Examples: <i>Sapienza, Bologna, Milan, Pisa, Rome, Bari, Catania</i>\n\n"
+                    f"<i>Tip: partial names work — 'Poli' will match 'Politecnico'</i>"
                 )
                 self.edit_message_text(chat_id, msg_id, prompt, {
-                    "inline_keyboard": [[{"text": "🔙 Back", "callback_data": "wiz_exam_" + user_sessions[user_id]["data"].get("exam_type", "ALL")}]]
+                    "inline_keyboard": [[{"text": "🔙 Back", "callback_data": "wiz_back_to_uni"}]]
                 })
                 return
 
@@ -561,10 +707,15 @@ class TelegramBot:
 
         if data == "wiz_back_to_date":
             self.answer_callback_query(query_id)
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
             self.show_date_range_step(chat_id, user_id, msg_id)
             return
 
+        # ── Step 3: Date Range ───────────────────────────────────────
         if data.startswith("wiz_date_"):
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
             dtype = data.replace("wiz_date_", "")
             if dtype == "custom":
                 user_sessions[user_id]["step"] = "waiting_date_text"
@@ -579,7 +730,7 @@ class TelegramBot:
                     f"• <code>August 2026</code>"
                 )
                 self.edit_message_text(chat_id, msg_id, prompt, {
-                    "inline_keyboard": [[{"text": "🔙 Back", "callback_data": "wiz_uni_" + user_sessions[user_id]["data"].get("university_query", "ANY")}]]
+                    "inline_keyboard": [[{"text": "🔙 Back", "callback_data": "wiz_back_to_date"}]]
                 })
                 return
 
@@ -591,6 +742,7 @@ class TelegramBot:
                 s_date, e_date = now_d.isoformat(), (now_d + timedelta(days=60)).isoformat()
             elif dtype == "aug_sep":
                 s_date, e_date = matcher.parse_user_date_range("August to September")
+            # dtype == "any" → s_date, e_date remain None
 
             user_sessions[user_id]["data"]["start_date"] = s_date
             user_sessions[user_id]["data"]["end_date"] = e_date
@@ -598,25 +750,40 @@ class TelegramBot:
             self.show_duration_step(chat_id, user_id, msg_id)
             return
 
+        # ── Step 4: Duration ─────────────────────────────────────────
         if data.startswith("wiz_dur_"):
-            days = int(data.replace("wiz_dur_", ""))
+            if not self._require_session(user_id, query_id, chat_id, msg_id):
+                return
+            try:
+                days = int(data.replace("wiz_dur_", ""))
+            except ValueError:
+                self.answer_callback_query(query_id, "Invalid selection. Please try again.", show_alert=True)
+                return
             user_sessions[user_id]["data"]["duration_days"] = days
             self.answer_callback_query(query_id, "Saving tracker...")
             self.finalize_filter_creation(chat_id, user_id, msg_id)
             return
 
-        # Action: Pause / Resume / Delete / Renew
+        # ── Tracker Management ───────────────────────────────────────
         if data.startswith("toggle_"):
             parts = data.split("_")
-            fid = int(parts[1])
-            new_status = parts[2]
+            try:
+                fid = int(parts[1])
+                new_status = parts[2]
+            except (IndexError, ValueError):
+                self.answer_callback_query(query_id, "Invalid action.", show_alert=True)
+                return
             db.update_filter_status(fid, user_id, new_status, db_path=self.db_path)
             self.answer_callback_query(query_id, f"Tracker #{fid} {new_status}!")
             self.show_user_trackers(chat_id, user_id, msg_id)
             return
 
         if data.startswith("del_"):
-            fid = int(data.replace("del_", ""))
+            try:
+                fid = int(data.replace("del_", ""))
+            except ValueError:
+                self.answer_callback_query(query_id, "Invalid action.", show_alert=True)
+                return
             db.delete_filter(fid, user_id, db_path=self.db_path)
             self.answer_callback_query(query_id, f"Tracker #{fid} deleted!", show_alert=True)
             self.show_user_trackers(chat_id, user_id, msg_id)
@@ -624,12 +791,20 @@ class TelegramBot:
 
         if data.startswith("renew_"):
             parts = data.split("_")
-            fid = int(parts[1])
-            days = int(parts[2])
+            try:
+                fid = int(parts[1])
+                days = int(parts[2])
+            except (IndexError, ValueError):
+                self.answer_callback_query(query_id, "Invalid action.", show_alert=True)
+                return
             db.renew_filter(fid, user_id, additional_days=days, db_path=self.db_path)
             self.answer_callback_query(query_id, f"Tracker #{fid} extended for {days} days!", show_alert=True)
             self.show_user_trackers(chat_id, user_id, msg_id)
             return
+
+        # Unknown callback — fall back to main menu
+        self.answer_callback_query(query_id)
+        self.show_main_menu(chat_id, user, msg_id)
 
     def handle_text_message(self, msg: dict):
         """Processes incoming text messages and conversation inputs."""
@@ -645,7 +820,7 @@ class TelegramBot:
             db_path=self.db_path
         )
 
-        # Commands
+        # ── Commands ─────────────────────────────────────────────────
         if text.startswith("/start") or text.startswith("/menu"):
             user_sessions.pop(user_id, None)
             self.show_main_menu(chat_id, user)
@@ -669,17 +844,24 @@ class TelegramBot:
             self.show_help(chat_id)
             return
 
-        # Handle conversation text input states
+        if text.startswith("/cancel"):
+            user_sessions.pop(user_id, None)
+            self.send_message(chat_id, "❌ <b>Operation cancelled.</b> Use /start to return to the main menu.")
+            return
+
+        # ── Wizard text input states ──────────────────────────────────
         sess = user_sessions.get(user_id)
+
         if sess and sess.get("step") == "waiting_uni_text":
-            # Smart match university name
+            # Match using word-boundary fuzzy — store typed value directly for live row matching
             match, score, matched_name = matcher.match_university(text, text)
-            resolved_query = matched_name if match and score > 0.8 else text
-            sess["data"]["university_query"] = resolved_query
+            # We store the typed query, not the matched canonical name, because
+            # matching happens against live CISIA rows at alert time
+            sess["data"]["university_query"] = text
             sess["step"] = "date_range"
             msg_id = sess.get("msg_id")
 
-            self.send_message(chat_id, f"🏛 University set to: <b>{html.escape(resolved_query)}</b>")
+            self.send_message(chat_id, f"🏛 University set to: <b>{html.escape(text)}</b>")
             self.show_date_range_step(chat_id, user_id, None)
             return
 

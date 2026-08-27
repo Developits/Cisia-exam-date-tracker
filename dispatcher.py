@@ -80,11 +80,16 @@ def dispatch_personalized_alerts(row: dict, change_type: str, old_status: str = 
 
         date_window_str = ""
         if f.get("start_date") or f.get("end_date"):
-            date_window_str = f" • 📅 {f.get('start_date', 'Any')} to {f.get('end_date', 'Any')}"
+            start_d = f.get("start_date") or "Any"
+            end_d = f.get("end_date") or "Any"
+            date_window_str = f" • 📅 {start_d} to {end_d}"
+
+        # Format comma-separated exam types for display
+        exam_display = html.escape(f["exam_type"].replace(",", " / "))
 
         message = (
             f"🚨 <b>MATCHING CISIA SEAT AVAILABLE!</b>\n\n"
-            f"🎯 <i>Matches your filter #{filter_id} ({html.escape(f['exam_type'])} • 🏛 {html.escape(f['university_query'])}{date_window_str})</i>\n\n"
+            f"🎯 <i>Matches your filter #{filter_id} ({exam_display} • 🏛 {html.escape(f['university_query'])}{date_window_str})</i>\n\n"
             f"{reason_text}\n\n"
             f"🏛 <b>University:</b> {html.escape(row['university'])}\n"
             f"💻 <b>Format:</b> {html.escape(row['format'])}\n"

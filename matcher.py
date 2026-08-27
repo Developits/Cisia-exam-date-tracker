@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
 Matching Engine and Date Utilities for CISIA Filters.
-Provides fuzzy university matching, date range validation, and row evaluation.
+Provides university matching, date range validation, and filter row evaluation.
+
+University matching strategy:
+  - No alias dictionary (removed to prevent short-name false positives like 'bari' in 'Cagliari').
+  - Uses word-boundary case-insensitive substring matching against the live CISIA row fields.
+  - Falls back to difflib fuzzy ratio for close misspellings.
 """
 
 import re
@@ -14,101 +19,9 @@ import config
 
 logger = logging.getLogger("CISIA-Matcher")
 
-# Pre-defined known Italian universities and common shorthand aliases / typos
-UNIVERSITY_ALIASES = {
-    "sapienza": "Sapienza University of Rome",
-    "sepienga": "Sapienza University of Rome",
-    "sapien": "Sapienza University of Rome",
-    "roma sapienza": "Sapienza University of Rome",
-    "uniroma1": "Sapienza University of Rome",
-    "bologna": "University of Bologna",
-    "unibo": "University of Bologna",
-    "polimi": "Polytechnic University of Milan",
-    "politecnico milano": "Polytechnic University of Milan",
-    "politecnico di milano": "Polytechnic University of Milan",
-    "polytechnic milan": "Polytechnic University of Milan",
-    "unimi": "University of Milan",
-    "statale": "University of Milan",
-    "milano statale": "University of Milan",
-    "milan": "University of Milan",
-    "milano": "University of Milan",
-    "pisa": "University of Pisa",
-    "unipi": "University of Pisa",
-    "padova": "University of Padua",
-    "padua": "University of Padua",
-    "unipd": "University of Padua",
-    "turin": "Polytechnic University of Turin",
-    "torino": "Polytechnic University of Turin",
-    "polito": "Polytechnic University of Turin",
-    "unito": "University of Turin",
-    "napoli": "University of Naples Federico II",
-    "naples": "University of Naples Federico II",
-    "federico ii": "University of Naples Federico II",
-    "unina": "University of Naples Federico II",
-    "florence": "University of Florence",
-    "firenze": "University of Florence",
-    "unifi": "University of Florence",
-    "genoa": "University of Genoa",
-    "genova": "University of Genoa",
-    "unige": "University of Genoa",
-    "tor vergata": "University of Rome Tor Vergata",
-    "uniroma2": "University of Rome Tor Vergata",
-    "roma tre": "Roma Tre University",
-    "uniroma3": "Roma Tre University",
-    "trento": "University of Trento",
-    "unitn": "University of Trento",
-    "siena": "University of Siena",
-    "unisi": "University of Siena",
-    "verona": "University of Verona",
-    "univr": "University of Verona",
-    "pavia": "University of Pavia",
-    "unipv": "University of Pavia",
-    "trieste": "University of Trieste",
-    "units": "University of Trieste",
-    "messina": "University of Messina",
-    "unime": "University of Messina",
-    "parma": "University of Parma",
-    "unipr": "University of Parma",
-    "catania": "University of Catania",
-    "unict": "University of Catania",
-    "palermo": "University of Palermo",
-    "unipa": "University of Palermo",
-    "bari": "University of Bari",
-    "uniba": "University of Bari",
-    "salerno": "University of Salerno",
-    "unisa": "University of Salerno",
-    "modena": "University of Modena and Reggio Emilia",
-    "unimore": "University of Modena and Reggio Emilia",
-    "bergamo": "University of Bergamo",
-    "unibg": "University of Bergamo",
-    "brescia": "University of Brescia",
-    "unibs": "University of Brescia",
-    "venezia": "Ca' Foscari University of Venice",
-    "ca foscari": "Ca' Foscari University of Venice",
-    "unive": "Ca' Foscari University of Venice",
-    "udine": "University of Udine",
-    "uniud": "University of Udine",
-    "aquila": "University of L'Aquila",
-    "univaq": "University of L'Aquila",
-    "calabria": "University of Calabria",
-    "unical": "University of Calabria"
-}
-
-POPULAR_UNIVERSITIES = [
-    "Sapienza University of Rome",
-    "University of Bologna",
-    "Polytechnic University of Milan",
-    "University of Milan",
-    "University of Pisa",
-    "University of Padua",
-    "Polytechnic University of Turin",
-    "University of Florence",
-    "University of Rome Tor Vergata"
-]
-
 
 def normalize_text(text: str) -> str:
-    """Lowercases, strips special characters, and condenses spaces."""
+    """Lowercases and condenses whitespace. Keeps word characters only."""
     if not text:
         return ""
     cleaned = re.sub(r"[^\w\s]", " ", text.lower())
@@ -134,8 +47,7 @@ def parse_user_date_range(text: str, default_year: int = None) -> tuple[str | No
     Parses flexible user inputs into (start_date_str, end_date_str) in 'YYYY-MM-DD' format.
     Accepts:
       - '10/08/2026 - 15/09/2026' or '10/08 to 15/09'
-      - '10 Aug - 15 Sep 2026'
-      - 'August 2026'
+      - 'August 2026' or 'August to September'
       - '2026-08-10 to 2026-09-15'
     """
     if not text:
@@ -169,7 +81,10 @@ def parse_user_date_range(text: str, default_year: int = None) -> tuple[str | No
     }
 
     # Match numeric ranges like "10/08/2026 - 15/09/2026" or "10/08 - 15/09"
-    range_match = re.search(r"(\d{1,2})[/\-\.](\d{1,2})(?:[/\-\.](\d{2,4}))?\s*(?:-|to|until|–|—)\s*(\d{1,2})[/\-\.](\d{1,2})(?:[/\-\.](\d{2,4}))?", cleaned, re.IGNORECASE)
+    range_match = re.search(
+        r"(\d{1,2})[/\-\.](\d{1,2})(?:[/\-\.](\d{2,4}))?\s*(?:-|to|until|–|—)\s*(\d{1,2})[/\-\.](\d{1,2})(?:[/\-\.](\d{2,4}))?",
+        cleaned, re.IGNORECASE
+    )
     if range_match:
         d1, m1, y1, d2, m2, y2 = range_match.groups()
         year1 = int(y1) if y1 else year
@@ -204,7 +119,7 @@ def parse_user_date_range(text: str, default_year: int = None) -> tuple[str | No
     norm = cleaned.lower()
     found_months = []
     for name, num in months.items():
-        if re.search(rf"\b{name}\b", norm):
+        if re.search(rf"\b{re.escape(name)}\b", norm):
             found_months.append(num)
 
     if found_months:
@@ -213,7 +128,6 @@ def parse_user_date_range(text: str, default_year: int = None) -> tuple[str | No
         m_end = found_months[-1]
         try:
             start_dt = date(year, m_start, 1)
-            # Find last day of end month
             next_m = m_end + 1 if m_end < 12 else 1
             next_y = year if m_end < 12 else year + 1
             end_dt = date(next_y, next_m, 1) - timedelta(days=1)
@@ -226,7 +140,14 @@ def parse_user_date_range(text: str, default_year: int = None) -> tuple[str | No
 
 def match_university(query: str, target_university: str, target_city: str = "", target_region: str = "") -> tuple[bool, float, str]:
     """
-    Evaluates whether a target university matches the user query.
+    Evaluates whether a target university row matches the user's typed query.
+
+    Strategy (no alias dictionary — eliminates false positives like 'bari' in 'Cagliari'):
+      1. ANY → always matches.
+      2. Word-boundary substring: each word in query must appear as a whole word in
+         the combined target string (university + city + region).
+      3. Fuzzy ratio via difflib against the university name for close misspellings.
+
     Returns (is_match, confidence_score, matched_name).
     """
     if not query or query.strip().upper() == "ANY":
@@ -239,54 +160,79 @@ def match_university(query: str, target_university: str, target_city: str = "", 
 
     combined_target = f"{target_norm} {city_norm} {region_norm}"
 
-    # 1. Check alias dictionary
-    for alias, canonical in UNIVERSITY_ALIASES.items():
-        if alias in q_norm or q_norm in alias:
-            canonical_norm = normalize_text(canonical)
-            if canonical_norm in combined_target or q_norm in combined_target:
-                return True, 0.95, canonical
+    # 1. Word-boundary match: every query token must be a whole word in combined target
+    stop_words = {"university", "of", "di", "degli", "studi", "the", "la", "le", "li"}
+    q_tokens = [t for t in q_norm.split() if len(t) > 1 and t not in stop_words]
 
-    # 2. Substring match
-    if q_norm in combined_target:
-        return True, 0.90, target_university
-
-    # 3. Token-level overlap
-    q_tokens = [t for t in q_norm.split() if len(t) > 2 and t not in ["university", "of", "di", "degli", "studi"]]
     if q_tokens:
-        matched_tokens = [t for t in q_tokens if t in combined_target]
-        if len(matched_tokens) == len(q_tokens):
-            return True, 0.85, target_university
+        all_match = all(
+            re.search(rf"\b{re.escape(tok)}\b", combined_target)
+            for tok in q_tokens
+        )
+        if all_match:
+            return True, 0.90, target_university
 
-    # 4. Fuzzy ratio via difflib SequenceMatcher
+    # 2. Fuzzy ratio via difflib for misspellings (e.g. "Sapineza" → "Sapienza")
+    #    Compare against the full name AND the first significant word (most distinctive part)
     ratio = difflib.SequenceMatcher(None, q_norm, target_norm).ratio()
-    if ratio >= 0.65:
+    if ratio >= 0.70:
         return True, ratio, target_university
 
-    # Check fuzzy against city
+    # Fuzzy against just the first significant word of the university (e.g. "sapienza")
+    first_word = target_norm.split()[0] if target_norm else ""
+    if len(first_word) > 3 and first_word not in ("the", "universita", "university"):
+        first_ratio = difflib.SequenceMatcher(None, q_norm, first_word).ratio()
+        if first_ratio >= 0.80:
+            return True, first_ratio, target_university
+
+    # 3. Fuzzy against city name
     if city_norm:
         city_ratio = difflib.SequenceMatcher(None, q_norm, city_norm).ratio()
-        if city_ratio >= 0.75:
+        if city_ratio >= 0.80:
             return True, city_ratio, target_university
 
     return False, 0.0, ""
 
 
 def match_exam_type(filter_exam_type: str, row_test_type: str) -> bool:
-    """Checks if the row test type matches the filter exam type."""
-    if not filter_exam_type or filter_exam_type.strip().upper() == "ALL":
+    """
+    Checks if the row test type matches the filter exam type.
+    filter_exam_type may be a comma-separated list (multi-select), e.g.:
+      'TOLC-I (Engineering),CEnT-S (English)'
+    A row matches if it matches ANY of the selected exam types (OR logic).
+    """
+    if not filter_exam_type or filter_exam_type.strip().upper() in ("ALL", "ANY"):
         return True
 
-    f_norm = normalize_text(filter_exam_type)
     r_norm = normalize_text(row_test_type)
 
-    if "tolc i" in f_norm or "ingegneria" in f_norm:
-        return "tolc i" in r_norm or "engineering" in r_norm or "ingegneria" in r_norm
-    if "tolc e" in f_norm or "economia" in f_norm:
-        return "tolc e" in r_norm or "economics" in r_norm or "economia" in r_norm
-    if "cent s" in f_norm or "cents" in f_norm:
-        return "cent s" in r_norm or "cents" in r_norm or "cent" in r_norm
+    # Split comma-separated exam types and check each one
+    exam_types = [e.strip() for e in filter_exam_type.split(",") if e.strip()]
 
-    return f_norm in r_norm or r_norm in f_norm
+    for exam_type in exam_types:
+        f_norm = normalize_text(exam_type)
+
+        # TOLC-I / Engineering
+        if "tolc i" in f_norm or "engineering" in f_norm or "ingegneria" in f_norm:
+            if "tolc i" in r_norm or "engineering" in r_norm or "ingegneria" in r_norm:
+                return True
+
+        # TOLC-E / Economics
+        elif "tolc e" in f_norm or "economics" in f_norm or "economia" in f_norm:
+            if "tolc e" in r_norm or "economics" in r_norm or "economia" in r_norm:
+                return True
+
+        # CEnT-S: use strict pattern to avoid matching unrelated words containing "cent"
+        elif "cent s" in f_norm or "cents" in f_norm or "cent-s" in f_norm:
+            if re.search(r"\bcent[\s\-]?s\b", r_norm) or "cents" in r_norm:
+                return True
+
+        # Fallback: direct substring
+        else:
+            if f_norm in r_norm or r_norm in f_norm:
+                return True
+
+    return False
 
 
 def is_date_in_range(test_date_str: str, start_date_str: str = None, end_date_str: str = None) -> bool:
@@ -311,18 +257,19 @@ def is_date_in_range(test_date_str: str, start_date_str: str = None, end_date_st
 def row_matches_filter(row: dict, filter_dict: dict) -> bool:
     """
     Comprehensive evaluation of a scraped CISIA row against a user filter.
-    Enforces strictly @HOME modality, matching exam type, university, and date window.
+    Enforces strictly @HOME / @CASA modality, matching exam type (multi-select),
+    university (word-boundary fuzzy), and date window.
     """
-    # 1. Modality check: Strictly TOLC@HOME / CENT@HOME
+    # 1. Modality check: Strictly TOLC@HOME / CENT@HOME / TOLC@CASA
     fmt = (row.get("format") or "").upper()
     if "HOME" not in fmt and "CASA" not in fmt:
         return False
 
-    # 2. Exam Type check
+    # 2. Exam Type check (supports comma-separated multi-exam filter)
     if not match_exam_type(filter_dict.get("exam_type", "ALL"), row.get("test_type", "")):
         return False
 
-    # 3. University check
+    # 3. University check (word-boundary fuzzy, no alias dictionary)
     uni_query = filter_dict.get("university_query", "ANY")
     uni_match, _, _ = match_university(
         uni_query,

@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-"""
-Unit tests for dispatcher.py
-"""
-
 import os
+import gc
 import unittest
 from unittest.mock import patch, MagicMock
 import config
@@ -14,14 +10,23 @@ import dispatcher
 class TestDispatcher(unittest.TestCase):
     def setUp(self):
         self.test_db = "test_dispatcher.db"
+        db._db_initialized.discard(self.test_db)
         if os.path.exists(self.test_db):
-            os.remove(self.test_db)
+            try:
+                os.remove(self.test_db)
+            except PermissionError:
+                pass
         db.init_db(self.test_db)
         db.register_or_update_user(1001, "student1", "Student", db_path=self.test_db)
 
     def tearDown(self):
+        gc.collect()
+        db._db_initialized.discard(self.test_db)
         if os.path.exists(self.test_db):
-            os.remove(self.test_db)
+            try:
+                os.remove(self.test_db)
+            except PermissionError:
+                pass
 
     @patch("dispatcher.send_bot_message", return_value=True)
     def test_dispatch_personalized_alerts(self, mock_send):

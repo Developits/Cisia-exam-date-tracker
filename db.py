@@ -14,11 +14,15 @@ import config
 
 logger = logging.getLogger("CISIA-DB")
 
+# Guard flag to avoid repeating CREATE TABLE / makedirs on every call
+_db_initialized: set[str] = set()
+
 
 def get_db_connection(db_path: str = None) -> sqlite3.Connection:
     """Returns a thread-safe sqlite3 connection with Row factory and WAL mode."""
     path = db_path or getattr(config, "DB_PATH", "subscriptions.db")
-    conn = sqlite3.connect(path, timeout=10)
+    # check_same_thread=False is safe because WAL mode handles concurrent readers/writers
+    conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
@@ -26,9 +30,16 @@ def get_db_connection(db_path: str = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: str = None):
-    """Initializes SQLite tables if they do not already exist."""
+    """Initializes SQLite tables if they do not already exist. Called once at startup."""
     path = db_path or getattr(config, "DB_PATH", "subscriptions.db")
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # Skip if already initialized AND the file still exists on disk
+    if path in _db_initialized and os.path.exists(path):
+        return
+
+    parent_dir = os.path.dirname(os.path.abspath(path))
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
     conn = get_db_connection(path)
     with conn:
         conn.execute("""
@@ -80,6 +91,24 @@ def init_db(db_path: str = None):
             CREATE INDEX IF NOT EXISTS idx_alerts_lookup ON alert_history(filter_id, seat_key);
         """)
     conn.close()
+    _db_initialized.add(path)
+    logger.info(f"Database initialized at: {path}")
+
+
+def purge_old_alert_history(db_path: str = None, days: int = 7):
+    """
+    Deletes alert_history records older than `days` days.
+    Called periodically to prevent unbounded table growth.
+    """
+    cutoff = (datetime.now(ZoneInfo(config.TIMEZONE)) - timedelta(days=days)).isoformat()
+    conn = get_db_connection(db_path)
+    with conn:
+        cursor = conn.execute(
+            "DELETE FROM alert_history WHERE sent_at < ?", (cutoff,)
+        )
+        if cursor.rowcount > 0:
+            logger.info(f"Purged {cursor.rowcount} old alert_history rows (older than {days} days).")
+    conn.close()
 
 
 def register_or_update_user(user_id: int, username: str = "", first_name: str = "", db_path: str = None) -> dict:
@@ -111,6 +140,7 @@ def create_filter(
 ) -> int:
     """
     Creates a new filter subscription for a user.
+    exam_type may be a comma-separated list for multi-exam tracking.
     Calculates expires_at based on duration_days or end_date.
     """
     init_db(db_path)
@@ -121,7 +151,6 @@ def create_filter(
     if duration_days and duration_days > 0:
         expires_at = (now_rome + timedelta(days=duration_days)).isoformat()
     elif end_date:
-        # If no duration is given, expiry can default to the end_date 23:59:59
         try:
             ed = datetime.strptime(end_date, "%Y-%m-%d").replace(
                 hour=23, minute=59, second=59, tzinfo=ZoneInfo(config.TIMEZONE)
@@ -155,7 +184,7 @@ def get_user_filters(user_id: int, include_inactive: bool = True, db_path: str =
     if not include_inactive:
         query += " AND status = 'active'"
     query += " ORDER BY id DESC"
-    
+
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -233,8 +262,8 @@ def get_all_active_filters(db_path: str = None) -> list[dict]:
 
 def check_and_expire_filters(db_path: str = None) -> list[dict]:
     """
-    Checks active filters against current Rome time.
-    Marks any expired filters as 'expired' and returns them so alerts can be sent.
+    Marks any expired active filters as 'expired' and returns them.
+    Also triggers periodic alert_history cleanup every ~100 calls (probabilistic).
     """
     init_db(db_path)
     now_rome = datetime.now(ZoneInfo(config.TIMEZONE))
@@ -255,12 +284,22 @@ def check_and_expire_filters(db_path: str = None) -> list[dict]:
     if expired_filters:
         expired_ids = [f["id"] for f in expired_filters]
         with conn:
-            conn.executemany("""
-                UPDATE filters SET status = 'expired' WHERE id = ?
-            """, [(fid,) for fid in expired_ids])
+            conn.executemany(
+                "UPDATE filters SET status = 'expired' WHERE id = ?",
+                [(fid,) for fid in expired_ids]
+            )
         logger.info(f"Marked {len(expired_filters)} filters as expired: {expired_ids}")
 
     conn.close()
+
+    # Probabilistic cleanup: ~1% chance per cycle to purge old alert_history
+    import random
+    if random.random() < 0.01:
+        try:
+            purge_old_alert_history(db_path=db_path, days=7)
+        except Exception as e:
+            logger.warning(f"Alert history cleanup failed: {e}")
+
     return expired_filters
 
 
@@ -271,10 +310,7 @@ def should_send_alert(
     cooldown_seconds: int = None,
     db_path: str = None
 ) -> bool:
-    """
-    Checks if an alert for this seat_key has already been sent to this user/filter recently.
-    Prevents repeated spam.
-    """
+    """Checks if an alert for this seat_key has already been sent to this user/filter recently."""
     init_db(db_path)
     cooldown = cooldown_seconds if cooldown_seconds is not None else getattr(config, "ALERT_COOLDOWN_SECONDS", 3600)
     now_rome = datetime.now(ZoneInfo(config.TIMEZONE))
@@ -287,7 +323,6 @@ def should_send_alert(
         ORDER BY sent_at DESC LIMIT 1
     """, (filter_id, seat_key, cutoff_time)).fetchone()
     conn.close()
-
     return row is None
 
 
@@ -296,13 +331,16 @@ def record_alert_sent(filter_id: int, user_id: int, seat_key: str, db_path: str 
     init_db(db_path)
     now_iso = datetime.now(ZoneInfo(config.TIMEZONE)).isoformat()
     conn = get_db_connection(db_path)
-    with conn:
-        conn.execute("""
-            INSERT INTO alert_history (filter_id, user_id, seat_key, sent_at)
-            VALUES (?, ?, ?, ?)
-        """, (filter_id, user_id, seat_key, now_iso))
-
-        conn.execute("""
-            UPDATE filters SET last_alert_at = ? WHERE id = ?
-        """, (now_iso, filter_id))
+    try:
+        with conn:
+            conn.execute("""
+                INSERT INTO alert_history (filter_id, user_id, seat_key, sent_at)
+                VALUES (?, ?, ?, ?)
+            """, (filter_id, user_id, seat_key, now_iso))
+            conn.execute("""
+                UPDATE filters SET last_alert_at = ? WHERE id = ?
+            """, (now_iso, filter_id))
+    except Exception as e:
+        # Filter may have been deleted between should_send_alert and record_alert_sent
+        logger.warning(f"Could not record alert for filter #{filter_id} (may have been deleted): {e}")
     conn.close()

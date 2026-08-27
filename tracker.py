@@ -75,14 +75,16 @@ def calculate_sleep_seconds(dt: datetime) -> float:
         # Sleep until the exact start of the next minute
         return max(1.0, 60.0 - dt.second - (dt.microsecond / 1_000_000.0))
 
-    # Next active time is START_HOUR:START_MINUTE (06:00:00)
-    if dt.hour >= config.END_HOUR and dt.minute > config.END_MINUTE:
-        # After 22:00, target is tomorrow at 06:00:00
+    end_total = config.END_HOUR * 60 + config.END_MINUTE   # e.g. 22:00 → 1320
+    time_minutes = dt.hour * 60 + dt.minute
+
+    if time_minutes > end_total:
+        # After 22:00 → sleep until tomorrow 06:00:00
         target = (dt + timedelta(days=1)).replace(
             hour=config.START_HOUR, minute=config.START_MINUTE, second=0, microsecond=0
         )
     else:
-        # Before 06:00, target is today at 06:00:00
+        # Before 06:00 → sleep until today 06:00:00
         target = dt.replace(
             hour=config.START_HOUR, minute=config.START_MINUTE, second=0, microsecond=0
         )
@@ -252,6 +254,7 @@ def send_developer_error_alert(error_title: str, error_detail: str, traceback_st
     """
     Sends an error notification with stack trace directly to the developer Telegram chat ID (Mr Marshmallow: 1720364178).
     Throttles identical error signatures to once every ERROR_THROTTLE_SECONDS unless force=True.
+    Periodically prunes the throttle cache to prevent unbounded memory growth.
     """
     token = config.TELEGRAM_BOT_TOKEN.strip()
     dev_id = getattr(config, "DEVELOPER_CHAT_ID", "").strip()
@@ -268,6 +271,11 @@ def send_developer_error_alert(error_title: str, error_detail: str, traceback_st
             return False
 
     _last_error_alerts[error_key] = now
+
+    # Prune stale entries older than ERROR_THROTTLE_SECONDS to prevent dict growing unboundedly
+    stale_keys = [k for k, ts in _last_error_alerts.items() if now - ts > config.ERROR_THROTTLE_SECONDS * 2]
+    for k in stale_keys:
+        del _last_error_alerts[k]
 
     rome_time = get_rome_now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -479,6 +487,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 "telegram_configured": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             }
             self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return  # IMPORTANT: must return here to avoid fallthrough to default handler
         if self.path == "/test-error":
             sample_tb = (
                 "Traceback (most recent call last):\n"

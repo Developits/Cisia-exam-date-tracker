@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-"""
-Unit tests for db.py
-"""
-
 import os
+import gc
 import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -14,13 +10,23 @@ import db
 class TestDB(unittest.TestCase):
     def setUp(self):
         self.test_db = "test_subscriptions.db"
+        # Remove guard so init_db reinitializes fresh tables for each test
+        db._db_initialized.discard(self.test_db)
         if os.path.exists(self.test_db):
-            os.remove(self.test_db)
+            try:
+                os.remove(self.test_db)
+            except PermissionError:
+                pass
         db.init_db(self.test_db)
 
     def tearDown(self):
+        gc.collect()  # Force close any lingering SQLite connections on Windows
+        db._db_initialized.discard(self.test_db)
         if os.path.exists(self.test_db):
-            os.remove(self.test_db)
+            try:
+                os.remove(self.test_db)
+            except PermissionError:
+                pass  # Will be cleaned up on next setUp
 
     def test_user_registration_and_filter_crud(self):
         # Register user
