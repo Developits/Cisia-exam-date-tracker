@@ -585,6 +585,12 @@ def main():
     # Start interactive filter bot poller thread
     bot_instance.start_polling_in_thread()
 
+    # Notify users after server restart/redeploy that filters have been reset
+    try:
+        dispatcher.dispatch_server_restart_alert()
+    except Exception as e:
+        logger.warning(f"Could not send server restart notifications: {e}")
+
     logger.info("==================================================")
     logger.info("       CISIA TOLC Availability Tracker Starting    ")
     logger.info(f" Timezone: {config.TIMEZONE}")

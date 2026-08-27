@@ -101,6 +101,13 @@ class TestDispatcher(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["university"], "University of Pisa")
 
+    @patch("dispatcher.send_bot_message", return_value=True)
+    def test_dispatch_server_restart_alert(self, mock_send):
+        with patch("config.FILTER_BOT_TOKEN", "dummy_token"), patch("config.TELEGRAM_CHAT_ID", "111,222;333"):
+            sent = dispatcher.dispatch_server_restart_alert()
+            self.assertEqual(sent, 3)
+            self.assertEqual(mock_send.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

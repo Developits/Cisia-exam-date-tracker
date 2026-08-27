@@ -174,3 +174,43 @@ def search_immediate_matches(filter_dict: dict, current_state: dict[str, dict]) 
             matches.append(row)
 
     return matches
+
+
+def dispatch_server_restart_alert() -> int:
+    """
+    Broadcasts a restart notification to all chat IDs configured in TELEGRAM_CHAT_ID.
+    Alerts users that the server has restarted/updated and prompts them to recreate their custom tracker.
+    """
+    token = config.FILTER_BOT_TOKEN
+    raw_chat_ids = config.TELEGRAM_CHAT_ID.strip()
+    if not token or not raw_chat_ids:
+        return 0
+
+    chat_ids = [c.strip() for c in raw_chat_ids.replace(";", ",").replace(" ", ",").split(",") if c.strip()]
+    if not chat_ids:
+        return 0
+
+    message = (
+        "⚠️ <b>Server restarted:</b> Active custom filters were reset due to a server update.\n\n"
+        "Please tap below or send /new to set your filter again:"
+    )
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "➕ Set Up Tracker", "callback_data": "wizard_start"}
+            ],
+            [
+                {"text": "🏠 Main Menu", "callback_data": "menu_main"}
+            ]
+        ]
+    }
+
+    sent_count = 0
+    for cid in chat_ids:
+        if send_bot_message(token, cid, message, reply_markup):
+            sent_count += 1
+            time.sleep(0.1)
+
+    logger.info(f"Server restart alert delivered to {sent_count}/{len(chat_ids)} users.")
+    return sent_count
