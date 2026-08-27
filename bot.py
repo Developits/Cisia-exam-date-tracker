@@ -69,6 +69,11 @@ class TelegramBot:
         url = f"https://api.telegram.org/bot{self.token}/{method}"
         try:
             res = self.http.post(url, json=payload or {}, timeout=timeout)
+            if res.status_code == 409:
+                # 409 Conflict occurs briefly during Render zero-downtime deploys while the previous container terminates
+                logger.info(f"Telegram polling session conflict (409) on {method} — waiting for previous instance to exit...")
+                time.sleep(3)
+                return None
             res.raise_for_status()
             data = res.json()
             if data.get("ok"):
@@ -76,7 +81,8 @@ class TelegramBot:
             logger.warning(f"Telegram API returned error for {method}: {data}")
             return None
         except Exception as e:
-            logger.error(f"Error calling Telegram API {method}: {e}")
+            if "409" not in str(e):
+                logger.error(f"Error calling Telegram API {method}: {e}")
             return None
 
     def send_message(self, chat_id: int | str, text: str, reply_markup: dict = None) -> dict | None:
@@ -924,6 +930,12 @@ class TelegramBot:
         if not self.token:
             logger.warning("FILTER_BOT_TOKEN not configured. Interactive filter bot will not start.")
             return
+
+        # Delete any existing webhook to ensure getUpdates long-polling works cleanly
+        try:
+            self.api_call("deleteWebhook", {"drop_pending_updates": False})
+        except Exception:
+            pass
 
         self.running = True
         self._thread = threading.Thread(target=self.poll_updates, daemon=True)

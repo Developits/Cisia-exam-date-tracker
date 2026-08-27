@@ -39,6 +39,13 @@ def send_bot_message(token: str, chat_id: int | str, text: str, reply_markup: di
         res = http_session.post(url, json=payload, timeout=10)
         res.raise_for_status()
         return True
+    except requests.exceptions.HTTPError as e:
+        status = getattr(res, "status_code", 0)
+        if status == 400:
+            logger.warning(f"Could not send Telegram message to chat_id '{chat_id}' (user may not have started this bot yet)")
+        else:
+            logger.error(f"HTTP error sending Telegram message to chat_id '{chat_id}': {e}")
+        return False
     except Exception as e:
         logger.error(f"Failed to send Telegram message to chat_id '{chat_id}': {e}")
         return False
@@ -180,8 +187,10 @@ def dispatch_server_restart_alert() -> int:
     """
     Broadcasts a restart notification to all chat IDs configured in TELEGRAM_CHAT_ID.
     Alerts users that the server has restarted/updated and prompts them to recreate their custom tracker.
+    If a user has not started the interactive bot yet (returns 400), attempts fallback via broadcast bot.
     """
     token = config.FILTER_BOT_TOKEN
+    fallback_token = config.TELEGRAM_BOT_TOKEN
     raw_chat_ids = config.TELEGRAM_CHAT_ID.strip()
     if not token or not raw_chat_ids:
         return 0
@@ -208,9 +217,18 @@ def dispatch_server_restart_alert() -> int:
 
     sent_count = 0
     for cid in chat_ids:
-        if send_bot_message(token, cid, message, reply_markup):
+        # First try via the Interactive Filter Bot
+        success = send_bot_message(token, cid, message, reply_markup)
+        if not success and fallback_token and fallback_token != token:
+            # If user hasn't started the filter bot yet, notify them via the broadcast bot
+            fallback_msg = (
+                "⚠️ <b>Server updated:</b> The CISIA seat availability tracker was updated.\n\n"
+                "If you use custom seat filters, please open the filter bot and send /new to set your tracker."
+            )
+            success = send_bot_message(fallback_token, cid, fallback_msg)
+        if success:
             sent_count += 1
-            time.sleep(0.1)
+        time.sleep(0.1)
 
     logger.info(f"Server restart alert delivered to {sent_count}/{len(chat_ids)} users.")
     return sent_count
